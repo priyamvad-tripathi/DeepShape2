@@ -4,7 +4,6 @@ import galsim
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
-from tqdm import tqdm
 
 from deepshape2.utils import extract_image, load_config
 from deepshape2.visualization import plot
@@ -32,21 +31,59 @@ DEC0 = cfg["DEC0"]
 origin = SkyCoord(ra=RA0 * u.deg, dec=DEC0 * u.deg, frame="icrs")
 offset_frame = SkyOffsetFrame(origin=origin)
 
+# Size of wide field in degrees in flat sky approximation along one axis
+SKY_SIZE = 20
 
 # %% Catalogue Functions
-def random_patch(catalogue_type="wide", patch_size=1.0, seed=43):
-    catalogue = pd.read_pickle(f"/scratch/tripathi/TRECS/catalog_{catalogue_type}.pkl")
 
+
+def generate_patch_locations(
+    sky_size=SKY_SIZE, patch_size=1.0, max_patches=100, seed=43
+):
+    """Pre-select non-overlapping random patch locations."""
     if seed is not None:
         np.random.seed(seed)
 
-    # Randomly choose patch lower-left corner
-    x_min, x_max = catalogue["x"].min(), catalogue["x"].max()
-    y_min, y_max = catalogue["y"].min(), catalogue["y"].max()
-    rand_x0 = np.random.uniform(x_min, x_max - patch_size)
-    rand_y0 = np.random.uniform(y_min, y_max - patch_size)
-    x0, x1 = rand_x0, rand_x0 + patch_size
-    y0, y1 = rand_y0, rand_y0 + patch_size
+    x_min, x_max = -sky_size / 2, sky_size / 2
+    y_min, y_max = -sky_size / 2, sky_size / 2
+
+    chosen_regions = []
+    locations = []
+
+    attempts = 0
+    while len(chosen_regions) < max_patches and attempts < max_patches * 10:
+        rand_x0 = np.random.uniform(x_min, x_max - patch_size)
+        rand_y0 = np.random.uniform(y_min, y_max - patch_size)
+        x1, y1 = rand_x0 + patch_size, rand_y0 + patch_size
+
+        # Check overlap
+        overlap = any(
+            (
+                rand_x0 < xr + patch_size
+                and x1 > xr
+                and rand_y0 < yr + patch_size
+                and y1 > yr
+            )
+            for xr, yr in chosen_regions
+        )
+        if not overlap:
+            chosen_regions.append((rand_x0, rand_y0))
+            locations.append((rand_x0, rand_y0))
+        attempts += 1
+
+    if len(chosen_regions) < max_patches:
+        print(f"Warning: Only {len(chosen_regions)} non-overlapping patches found.")
+
+    return locations
+
+
+def random_patch(location, catalogue_type="wide", patch_size=1.0):
+    catalogue = pd.read_pickle(f"/scratch/tripathi/TRECS/catalog_{catalogue_type}.pkl")
+
+    # Choose patch location
+    x0, y0 = location
+    x1 = x0 + patch_size
+    y1 = y0 + patch_size
 
     # Compute patch centre in flat-sky coords
     cx = x0 + patch_size / 2.0
@@ -90,7 +127,7 @@ def random_patch(catalogue_type="wide", patch_size=1.0, seed=43):
     centre_ra = centre_icrs.ra.deg
     centre_dec = centre_icrs.dec.deg
 
-    return patch, (centre_ra, centre_dec), (x0, y0)
+    return patch, (centre_ra, centre_dec)
 
 
 def filter_patch_by_flux(
@@ -200,21 +237,14 @@ def simulate_wide_field(patch, bottom_left, **kwargs):
     sersic_index_all = []
     isolated_stamps_all = []
 
-    with tqdm(
-        total=len(patch_out),
-        unit="gal",
-        desc="Simulating gal stamps",
-        colour="green",
-    ) as pbar:
-        for row in patch_out.itertuples(index=False):
-            pbar.update(1)
-            stamp, sersic_index = simulate_galaxy(row, simple=simple)
+    for row in patch_out.itertuples(index=False):
+        stamp, sersic_index = simulate_galaxy(row, simple=simple)
 
-            bounds = stamp.bounds & field.bounds
-            field[bounds] += stamp[bounds]
+        bounds = stamp.bounds & field.bounds
+        field[bounds] += stamp[bounds]
 
-            isolated_stamps_all.append(stamp.array.copy())
-            sersic_index_all.append(sersic_index)
+        isolated_stamps_all.append(stamp.array.copy())
+        sersic_index_all.append(sersic_index)
 
     sky_array = field.array.copy()
     patch_out["sersic_index"] = sersic_index_all

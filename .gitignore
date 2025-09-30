@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environments
+.venv/
+.env/
+venv/
+
+# Build artifacts
+*.egg-info/
+*.egg
+dist/
+build/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# VSCode
+.vscode/
+
+# Mac/Linux system files
+.DS_Store
+*.swp
+

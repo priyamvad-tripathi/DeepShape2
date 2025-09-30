@@ -1,0 +1,8 @@
+Metadata-Version: 2.4
+Name: deepshape2
+Version: 0.1.0
+Summary: Wide field radio shape measurements with deep learning
+Requires-Python: ==3.12
+Description-Content-Type: text/markdown
+
+DeepShape v2: Wide-field shape measurement. Includes scripts for facet based image reconstruction and deep learning based optical image deblending.

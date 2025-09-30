@@ -1,0 +1,21 @@
+# Visibility parameters
+frequency: 1.4e9  # Hz
+integration_time: 300 # seconds
+ha_interval: [-4, 4] # hours
+
+# Pixel scale
+SCALE_RADIANS: 6.93e-07
+
+# Sky centre
+RA0 : 56.0
+DEC0 : -30.0
+
+# Sky Simulation
+NPIX_SKY: 25200   # Number of pixels along one axis of the sky model
+FFTBIGSIZE: 81488 # GalSim FFTBIG parameter
+
+
+# Paths
+data_dir: "/scratch/tripathi/DS2/Data/"
+results_dir: "/home/tripathi/DeepShape2/results/"
+TRECS_dir: "/scratch/tripathi/TRECS/"

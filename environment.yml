@@ -1,0 +1,7 @@
+name: main
+channels:
+  - defaults
+dependencies:
+  - python==3.12
+  - gfortran
+prefix: /home/tripathi/anaconda3/envs/main

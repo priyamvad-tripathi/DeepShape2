@@ -1,12 +1,41 @@
 # %% Load Modules
+import argparse
+import time
+
 import astropy.units as u
 import galsim
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord, SkyOffsetFrame
+from colorist import Color
+from dask import compute, delayed
+from dask.distributed import Client, LocalCluster
 
-from deepshape2.utils import extract_image, load_config
-from deepshape2.visualization import plot
+from deepshape2.utils import load_config, load_h5, post_step, process_stamp
+
+
+# %% Set up argparse
+def parse_args():
+    parser = argparse.ArgumentParser(description="Sky simulation arguments")
+
+    parser.add_argument(
+        "-w",
+        "--n-workers",
+        type=int,
+        default=50,
+        help="Number of Dask workers to use (default: 50)",
+    )
+
+    parser.add_argument(
+        "-nf",
+        "--n-patches",
+        type=int,
+        default=50,
+        help="Number of simulated patches (each 1 deg2 wide) (default: 50)",
+    )
+
+    return parser.parse_args()
+
 
 # %% Default Parameters
 
@@ -33,7 +62,11 @@ offset_frame = SkyOffsetFrame(origin=origin)
 
 # Size of wide field in degrees in flat sky approximation along one axis
 SKY_SIZE = 20
+NPIX_SKY = cfg["NPIX_SKY"]
 
+DATA_DIR = cfg["DATA_DIR"]
+
+NPIX_STAMP = 256
 # %% Catalogue Functions
 
 
@@ -178,12 +211,12 @@ def compute_pixel_coordinates(patch, bottom_left):
     return patch_out
 
 
-def simulate_galaxy(row, simple=False):
-    flux = row.flux
-    scale_length = row.size
-    e1 = row.e1
-    e2 = row.e2
-    pos = galsim.PositionI(row.pix_x, row.pix_y)
+def simulate_galaxy(row, simple=False, min_flux=10e-6):
+    flux = row["flux"]
+    scale_length = row["size"]
+    e1 = row["e1"]
+    e2 = row["e2"]
+    pos = galsim.PositionI(row["pix_x"], row["pix_y"])
 
     if simple:
         sersic_index = 1
@@ -208,13 +241,18 @@ def simulate_galaxy(row, simple=False):
     )
     stamp.replaceNegative(replace_value=0)
 
-    return stamp, sersic_index
+    if flux < min_flux:
+        isolated_stamp = 0
+    else:
+        isolated_stamp = process_stamp(stamp.array.copy(), NPIX=NPIX_STAMP)
+
+    return stamp, sersic_index, isolated_stamp
 
 
-def simulate_wide_field(patch, bottom_left, **kwargs):
+def simulate_wide_field(patch, bottom_left, NPIX_SKY=NPIX_SKY, **kwargs):
     verbosity = kwargs.get("verbosity", 0)
     simple = kwargs.get("simple", False)
-    NPIX_SKY = kwargs.get("NPIX_SKY", 25200)
+    min_flux = kwargs.get("min_flux", 10e-6)
 
     # Step 1: Compute pixel coordinates & RA/Dec
     patch_out = compute_pixel_coordinates(patch, bottom_left)
@@ -233,36 +271,106 @@ def simulate_wide_field(patch, bottom_left, **kwargs):
             f"Scale length: [{np.min(patch_out['size']):0.2f},{np.max(patch_out['size']):0.2f}] arcsec"
         )
 
-    # Step 3: Loop over galaxies
-    sersic_index_all = []
-    isolated_stamps_all = []
+    # Step 1: Run dask to simulate galaxies in parallel
+    def simulate_batch(batch, simple=simple, min_flux=min_flux):
+        return [simulate_galaxy(row, simple=simple, min_flux=min_flux) for row in batch]
 
-    for row in patch_out.itertuples(index=False):
-        stamp, sersic_index = simulate_galaxy(row, simple=simple)
+    rows = patch_out.to_dict(orient="records")
 
+    # chunk rows into groups of 100
+    chunk_size = 100
+    tasks = [
+        delayed(simulate_batch)(rows[i : i + chunk_size], simple=simple)
+        for i in range(0, len(rows), chunk_size)
+    ]
+
+    # Compute results
+    results = compute(*tasks)
+    results = [r for batch in results for r in batch]
+
+    # Extract sersic indexes
+    patch_out["sersic_index"] = np.stack([r[1] for r in results])
+
+    # Extract isolated stamps and corresponding flux mask
+    mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
+    patch_out["flux_mask"] = mask
+    isolated_stamps = np.stack(
+        [row[-1] for row in results if isinstance(row[-1], np.ndarray)]
+    )
+
+    # Step 3: Add full galaxy stamps to wide-field image
+    for stamp, *_ in results:
         bounds = stamp.bounds & field.bounds
         field[bounds] += stamp[bounds]
 
-        isolated_stamps_all.append(stamp.array.copy())
-        sersic_index_all.append(sersic_index)
-
     sky_array = field.array.copy()
-    patch_out["sersic_index"] = sersic_index_all
 
-    return sky_array, patch_out, isolated_stamps_all
+    return sky_array, patch_out, isolated_stamps
 
 
 # %% Test the wide-field simulation
 if __name__ == "__main__":
-    patch, centre, bottom_left = random_patch()
-    patch = filter_patch_by_size(filter_patch_by_flux(patch))
+    args = parse_args()
 
-    patch_sample = patch.sample(frac=0.05, random_state=1)
+    NUM_DASK_WORKERS = args.n_workers
+    NUM_PATCHES = args.n_patches
+    MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
 
-    sky_array, patch_out, isolated_stamps = simulate_wide_field(
-        patch_sample, bottom_left, simple=True, verbosity=1
-    )
+    data = load_h5(DATA_DIR + "sky.h5", mode="a", delete_if_exists=True)
+    data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
-    plot([np.log10(sky_array + 1e-9)], size_fac=3)
-    sky_patch = extract_image(sky_array, 8192)
-    plot([np.log10(sky_patch + 1e-9)], size_fac=3)
+    start = time.time()
+    with (
+        LocalCluster(
+            n_workers=NUM_DASK_WORKERS,
+            processes=True,
+            threads_per_worker=1,
+            scheduler_port=8786,
+            memory_limit=0,
+        ) as cluster,
+        Client(cluster) as client,
+    ):
+        print(client.dashboard_link)
+
+        locations = generate_patch_locations()[:NUM_PATCHES]
+
+        for nl, location in enumerate(locations):
+            print(
+                f"{Color.GREEN}Simulating patch {nl + 1}/{NUM_PATCHES} at location ({location[0]:.3f}, {location[1]:.3f}){Color.OFF}"
+            )
+
+            group = data.create_group(f"patch_{nl + 1:03d}")
+
+            # Extract galaxies at patch location
+            patch, centre = random_patch(location)
+            patch = filter_patch_by_size(filter_patch_by_flux(patch))
+            print(f"Number of galaxies in patch: {len(patch)}")
+
+            # Simulate wide-field image of the patch
+            sky_array, patch_out, isolated_stamps = simulate_wide_field(
+                patch, location, min_flux=MIN_FLUX
+            )
+
+            print(
+                f"Number of bright galaxies (flux>=10uJy): {patch_out['flux_mask'].sum()}"
+            )
+
+            # Save results
+            patch_rec = patch_out.to_records(index=False)
+            group.create_dataset("patch_df", data=patch_rec, compression="gzip")
+
+            group.create_dataset(
+                "sky", data=sky_array, compression="gzip", chunks=(1024, 1024)
+            )
+            group.attrs["centre"] = centre
+
+            group.create_dataset(
+                "isolated_stamps",
+                data=isolated_stamps,
+                compression="gzip",
+                chunks=(1, 256, 256),
+            )
+
+            post_step("field image simulation", start, client, data)
+
+    data.close()

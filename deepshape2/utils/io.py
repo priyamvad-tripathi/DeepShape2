@@ -3,8 +3,8 @@ import pickle
 from pathlib import Path
 
 import h5py
-from colorist import Color
 import pandas as pd
+from colorist import Color
 from omegaconf import OmegaConf
 
 _all__ = ["load", "save", "load_h5", "load_config"]
@@ -50,15 +50,11 @@ def save(data, path):
     print(f"Dumped data at {Color.GREEN}{path}{Color.OFF}")
 
 
-def load_h5(path, mode="r"):
+def load_h5(path, mode="r", delete_if_exists=False):
     if mode not in ["w", "r", "a"]:
         raise ValueError(f"Invalid mode '{mode}'. Allowed modes are 'w', 'r', 'a'.")
 
-    if mode == "w":
-        if os.path.exists(path):
-            os.remove(path)
+    if mode != "r" and (mode == "w" or delete_if_exists) and os.path.exists(path):
+        os.remove(path)
 
-    return h5py.File(path, mode)
-    return h5py.File(path, mode)
-    return h5py.File(path, mode)
     return h5py.File(path, mode)

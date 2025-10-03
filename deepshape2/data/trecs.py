@@ -4,11 +4,12 @@ import copy
 import numpy as np
 import pandas as pd
 from astropy.io import fits
+
 from deepshape2.utils import load_config
 
 # Directory containing the fits files
 cfg = load_config()
-FITS_DIR = cfg["TRECS_dir"]
+FITS_DIR = cfg["TRECS_DIR"]
 
 """
 To download the files:

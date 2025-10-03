@@ -1,7 +1,15 @@
 import galsim
 import numpy as np
 
-__all__ = ["extract_image", "extract_multiple", "shape_galsim", "get_stamps"]
+__all__ = [
+    "extract_image",
+    "extract_multiple",
+    "shape_galsim",
+    "get_stamps",
+    "process_stamp",
+]
+
+# %% Image extraction functions
 
 
 def extract_image(arr, NPIX=128, center=None, relative=True, switch_xy=True):
@@ -56,7 +64,6 @@ def extract_image(arr, NPIX=128, center=None, relative=True, switch_xy=True):
             centers.append((cy, cx))
 
     out = np.full((B, NPIX, NPIX), np.nan, dtype=float)
-    bad_indices = []
 
     for b in range(B):
         cy, cx = centers[b]
@@ -87,16 +94,6 @@ def extract_image(arr, NPIX=128, center=None, relative=True, switch_xy=True):
                 b, src_start_y:src_end_y, src_start_x:src_end_x
             ]
 
-        # Track bad crops
-        if start_y < 0 or start_x < 0 or end_y > H or end_x > W:
-            bad_indices.append(b)
-
-    # if bad_indices:
-    #     print(
-    #         f"Crops for batch indices {bad_indices} extend beyond image bounds; "
-    #         "out-of-bounds regions filled with NaN.",
-    #     )
-
     return out[0] if squeeze_out else out
 
 
@@ -106,40 +103,44 @@ def extract_multiple(arr, centers, NPIX=128, relative=True, switch_xy=True):
         raise ValueError("centers must be of shape (B, 2)")
 
     crops = []
-    bad_indices = []
 
     for i, center in enumerate(centers):
         crop = extract_image(
             arr, NPIX=NPIX, center=[center], relative=relative, switch_xy=switch_xy
         )
-        # detect if crop had NaNs → means out-of-bounds
-        if np.isnan(crop).any():
-            bad_indices.append(i)
         crops.append(crop)
 
-    # if bad_indices:
-    #     print(f"Crops at indices {bad_indices} extend beyond image bounds.")
-
     return np.stack(crops, axis=0)
+
+
+# %% Stamp processing functions
 
 
 def get_stamps(stamp_list, NPIX=128):
     resized = []
     for stamp in stamp_list:
-        size = stamp.shape[0]
-        if size == NPIX:
-            resized.append(stamp)
-        elif size > NPIX:
-            start = (size - NPIX) // 2
-            resized.append(stamp[start : start + NPIX, start : start + NPIX])
-        else:
-            pad = (NPIX - size) // 2
-            pad_extra = (NPIX - size) % 2
-            padded = np.pad(
-                stamp, ((pad, pad + pad_extra), (pad, pad + pad_extra)), mode="constant"
-            )
-            resized.append(padded)
+        resized.append(process_stamp(stamp, NPIX))
     return np.stack(resized)
+
+
+def process_stamp(stamp, NPIX):
+    size = stamp.shape[0]
+    if size == NPIX:
+        return stamp
+    elif size > NPIX:
+        start = (size - NPIX) // 2
+        return stamp[start : start + NPIX, start : start + NPIX]
+    else:
+        pad = (NPIX - size) // 2
+        pad_extra = (NPIX - size) % 2
+        return np.pad(
+            stamp,
+            ((pad, pad + pad_extra), (pad, pad + pad_extra)),
+            mode="constant",
+        )
+
+
+# %% Shape measurement functions
 
 
 def shape_galsim(image, NPIX=128):

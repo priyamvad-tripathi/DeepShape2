@@ -16,6 +16,6 @@ FFTBIGSIZE: 81488 # GalSim FFTBIG parameter
 
 
 # Paths
-data_dir: "/scratch/tripathi/DS2/Data/"
-results_dir: "/home/tripathi/DeepShape2/results/"
-TRECS_dir: "/scratch/tripathi/TRECS/"
+DATA_DIR: "/scratch/tripathi/DS2/Data/"
+RESULTS_DIR: "/home/tripathi/DeepShape2/results/"
+TRECS_DIR: "/scratch/tripathi/TRECS/"

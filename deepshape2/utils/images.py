@@ -7,6 +7,7 @@ __all__ = [
     "shape_galsim",
     "get_stamps",
     "process_stamp",
+    "centers_to_limits",
 ]
 
 # %% Image extraction functions
@@ -111,6 +112,18 @@ def extract_multiple(arr, centers, NPIX=128, relative=True, switch_xy=True):
         crops.append(crop)
 
     return np.stack(crops, axis=0)
+
+
+def centers_to_limits(centers, stamp_size):
+    x_c, y_c = centers[:, 0], centers[:, 1]
+    x0 = x_c - stamp_size // 2
+    x1 = x0 + stamp_size
+    y0 = y_c - stamp_size // 2
+    y1 = y0 + stamp_size
+
+    limits = np.stack([x0, x1, y0, y1], axis=1)
+
+    return limits.astype(int)
 
 
 # %% Stamp processing functions

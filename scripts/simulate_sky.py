@@ -1,8 +1,10 @@
 # %% Load Modules
 import argparse
 import time
+import warnings
 
 import astropy.units as u
+import dask.array as da
 import galsim
 import numpy as np
 import pandas as pd
@@ -11,7 +13,15 @@ from colorist import Color
 from dask import compute, delayed
 from dask.distributed import Client, LocalCluster
 
-from deepshape2.utils import load_config, load_h5, post_step, process_stamp
+from deepshape2.utils import (
+    centers_to_limits,
+    load_config,
+    load_h5,
+    post_step,
+    process_stamp,
+)
+
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
 # %% Set up argparse
@@ -351,9 +361,13 @@ if __name__ == "__main__":
                 patch, location, min_flux=MIN_FLUX
             )
 
-            print(
-                f"Number of bright galaxies (flux>=10uJy): {patch_out['flux_mask'].sum()}"
-            )
+            locs_pix = patch_out[["pix_x", "pix_y"]].values
+            mask = patch_out["flux_mask"].values
+            centers = locs_pix[mask]
+
+            lims = centers_to_limits(centers, stamp_size=NPIX_STAMP)
+
+            print(f"Number of bright galaxies (flux>=10uJy): {len(centers)}")
 
             # Save results
             patch_rec = patch_out.to_records(index=False)
@@ -372,5 +386,36 @@ if __name__ == "__main__":
             )
 
             post_step("field image simulation", start, client, data)
+
+            darr = da.from_array(sky_array, chunks=(5000, 5000))
+
+            def crop_dask(limits):
+                x0, x1, y0, y1 = limits
+                return darr[y0:y1, x0:x1]
+
+            del (
+                patch,
+                patch_out,
+                patch_rec,
+                isolated_stamps,
+                locs_pix,
+                centers,
+                sky_array,
+            )
+
+            crops = [crop_dask(lim) for lim in lims]
+
+            # Trigger computation in parallel
+            blended_stamps = da.compute(*crops)
+            blended_stamps = np.stack(blended_stamps, axis=0)
+
+            group.create_dataset(
+                "blended_stamps",
+                data=blended_stamps,
+                compression="gzip",
+                chunks=(1, 256, 256),
+            )
+
+            post_step("blended stamp extraction", start, client, data)
 
     data.close()

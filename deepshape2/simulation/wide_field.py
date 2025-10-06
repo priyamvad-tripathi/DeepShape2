@@ -113,10 +113,10 @@ def random_patch(location, catalogue_type="wide", patch_size=1.0):
 
     #  Drop galaxies which are too close to the edge
     mask = (
-        (patch["x"] - SCALE_DEGREES * 128 >= x0)
-        & (patch["x"] + SCALE_DEGREES * 128 <= x1)
-        & (patch["y"] - SCALE_DEGREES * 128 >= y0)
-        & (patch["y"] + SCALE_DEGREES * 128 <= y1)
+        (patch["x"] - SCALE_DEGREES * 130 >= x0)
+        & (patch["x"] + SCALE_DEGREES * 130 <= x1)
+        & (patch["y"] - SCALE_DEGREES * 130 >= y0)
+        & (patch["y"] + SCALE_DEGREES * 130 <= y1)
     )
     patch = patch[mask].copy()
 

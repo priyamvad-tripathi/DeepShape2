@@ -99,6 +99,9 @@ if __name__ == "__main__":
 
             locs_pix = patch_out[["pix_x", "pix_y"]].values
             mask = patch_out["flux_mask"].values
+
+            stamp_flux = patch_out["flux"].values[mask]
+
             centers = locs_pix[mask]
 
             lims = centers_to_limits(centers, stamp_size=NPIX_STAMP)
@@ -120,7 +123,9 @@ if __name__ == "__main__":
                 compression="gzip",
                 chunks=(1, 256, 256),
             )
-
+            group.create_dataset(
+                "stamp_flux", data=stamp_flux, compression="gzip", chunks=(1024,)
+            )
             post_step("field image simulation", start, client, data)
 
             darr = da.from_array(sky_array, chunks=(5000, 5000))

@@ -15,7 +15,13 @@ NPIX_SKY: 25200   # Number of pixels along one axis of the sky model
 FFTBIGSIZE: 81488 # GalSim FFTBIG parameter
 
 
+# VAE parameters
+VAE_beta: 1e-3  # KL Divergence weight for VAE
+VAE_lr_init: 1e-4 # Initial learning rate for VAE
+
+
 # Paths
+MODEL_DIR: "/home/tripathi/DS2/Model_weights/"
 DATA_DIR: "/scratch/tripathi/DS2/Data/"
 RESULTS_DIR: "/home/tripathi/DeepShape2/results/"
 TRECS_DIR: "/scratch/tripathi/TRECS/"

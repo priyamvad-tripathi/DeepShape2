@@ -4,7 +4,6 @@ import random
 import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 # Seed for reproducibility
 torch.manual_seed(2024)
@@ -15,29 +14,6 @@ torch.backends.cudnn.benchmark = True
 
 
 # %% VAE Model Definition
-class SelfAttention2D(nn.Module):
-    def __init__(self, in_channels):
-        super().__init__()
-        self.query = nn.Conv2d(in_channels, in_channels // 8, 1)
-        self.key = nn.Conv2d(in_channels, in_channels // 8, 1)
-        self.value = nn.Conv2d(in_channels, in_channels, 1)
-        self.gamma = nn.Parameter(torch.zeros(1))  # learnable scale
-
-    def forward(self, x):
-        B, C, H, W = x.shape
-        query = self.query(x).view(B, -1, H * W)  # B, C//8, N
-        key = self.key(x).view(B, -1, H * W)  # B, C//8, N
-        value = self.value(x).view(B, -1, H * W)  # B, C, N
-
-        attention = torch.bmm(query.permute(0, 2, 1), key)  # B, N, N
-        attention = F.softmax(attention / (key.shape[1] ** 0.5), dim=-1)
-
-        out = torch.bmm(value, attention.permute(0, 2, 1))  # B, C, N
-        out = out.view(B, C, H, W)
-
-        return self.gamma * out + x
-
-
 class MultiHeadSelfAttention2D(nn.Module):
     def __init__(self, in_channels, num_heads=4):
         super().__init__()

@@ -106,7 +106,9 @@ if __name__ == "__main__":
 
             lims = centers_to_limits(centers, stamp_size=NPIX_STAMP)
 
-            print(f"Number of bright galaxies (flux>=10uJy): {len(centers)}")
+            print(
+                f"Number of bright galaxies (flux>={MIN_FLUX * 1e6:.0f}uJy): {len(centers)}"
+            )
 
             # Save results
             patch_rec = patch_out.to_records(index=False)

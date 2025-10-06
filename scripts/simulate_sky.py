@@ -60,7 +60,7 @@ if __name__ == "__main__":
 
     NUM_DASK_WORKERS = args.n_workers
     NUM_PATCHES = args.n_patches
-    MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
+    MIN_FLUX = 20e-6  # Min flux in Jy for extracting stamps
 
     data = load_h5(DATA_DIR + "sky.h5", mode="a", delete_if_exists=True)
     data.attrs["min_flux_for_stamps"] = MIN_FLUX

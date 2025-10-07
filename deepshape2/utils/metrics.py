@@ -28,7 +28,7 @@ def psnr_batch(true_images, recon_images):
     # Compute max value per image
     max_vals = np.max(true_images, axis=(-2, -1))
 
-    psnr = 10 * np.log10((max_vals**2) / mse)
+    psnr = 10 * np.log10((max_vals**2) / (mse + 1e-10))
     return psnr
 
 

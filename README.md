@@ -1,4 +1,4 @@
-## DeepShape v2: Wide-field radio shape measurement using deep-learning. 
+## DeepShape v2: Source separation for radio weak-lensing measurements using deep learning. 
 
 Includes scripts for facet based image reconstruction and deep learning based optical image deblending.
 DeepShape v2 is the wide-field version of [DeepShape](https://github.com/priyamvad-tripathi/DeepShape.git)

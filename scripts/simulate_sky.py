@@ -62,8 +62,8 @@ if __name__ == "__main__":
     NUM_PATCHES = args.n_patches
     MIN_FLUX = 20e-6  # Min flux in Jy for extracting stamps
 
-    data = load_h5(DATA_DIR + "sky.h5", mode="a", delete_if_exists=True)
-    data.attrs["min_flux_for_stamps"] = MIN_FLUX
+    data = load_h5(DATA_DIR + "sky.h5", mode="a", delete_if_exists=False)
+    #data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
     start = time.time()
     with (
@@ -84,6 +84,9 @@ if __name__ == "__main__":
             print(
                 f"{Color.GREEN}Simulating patch {nl + 1}/{NUM_PATCHES} at location ({location[0]:.3f}, {location[1]:.3f}){Color.OFF}"
             )
+
+            if nl<30:
+                continue
 
             group = data.create_group(f"patch_{nl + 1:03d}")
 

@@ -73,6 +73,16 @@ def validation_loss(model, val_loader, device):
     return all_psnrs.mean().item()
 
 
+# %% Scaling function
+def inverse_scale(
+    arr: np.ndarray, scale_fac: float = 1e7, arcsin: bool = True
+) -> np.ndarray:
+    if arcsin:
+        arr = np.sinh(arr)
+    arr = arr / scale_fac
+    return arr
+
+
 # %% Training Function
 def train(
     model,
@@ -278,7 +288,15 @@ def train(
 
 
 # %% Prediction Function
-def predict(model, weights, val_loader, device, print_stats=True, n=5):
+def predict(
+    model,
+    weights,
+    val_loader,
+    device,
+    print_stats=True,
+    n=5,
+    inv_scale={"arcsin": True, "scale_fac": 1e7},
+):
     model.load_state_dict(weights)
     model.eval()
 
@@ -303,6 +321,11 @@ def predict(model, weights, val_loader, device, print_stats=True, n=5):
     targets = np.concatenate(targets)
     outputs = np.concatenate(outputs)
     inputs = np.concatenate(inputs)
+
+    if inv_scale:
+        targets = inverse_scale(targets, **inv_scale)
+        outputs = inverse_scale(outputs, **inv_scale)
+        inputs = inverse_scale(inputs, **inv_scale)
 
     # Compute image quality metrics
     psnr_out = psnr_batch(targets, outputs)
@@ -346,3 +369,58 @@ def predict(model, weights, val_loader, device, print_stats=True, n=5):
         )
 
     return metrics
+
+
+def plot_bad_cases(
+    metrics,
+    names=["PSNR", "SSIM"],
+    category="input",
+    n=5,
+    inv_scale={"arcsin": True, "scale_fac": 1e7},
+):
+    psnr_out = metrics["psnr_out"]
+    ssim_out = metrics["ssim_out"]
+    psnr_in = metrics["psnr_in"]
+    ssim_in = metrics["ssim_in"]
+    targets = metrics["targets"]
+    outputs = metrics["output"]
+    inputs = metrics["input"]
+
+    if category == "input":
+        stats = [psnr_in, ssim_in]
+        key = "inputs"
+    elif category == "output":
+        stats = [psnr_out, ssim_out]
+        key = "reconstructions"
+    else:
+        print("Unknown category")
+
+    for stat, name in zip(stats, names):
+        ind = np.argsort(stat)[:n]
+
+        tit_in = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_in[ind], psnr_in[ind])]
+        tit_out = [
+            f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[ind], psnr_out[ind])
+        ]
+        blank_titles = [None] * len(tit_in)
+
+        target_ind = targets[ind]
+        input_ind = inputs[ind]
+        output_ind = outputs[ind]
+
+        if inv_scale:
+            target_ind = inverse_scale(target_ind, **inv_scale)
+            input_ind = inverse_scale(input_ind, **inv_scale)
+            output_ind = inverse_scale(output_ind, **inv_scale)
+
+        residual_ind = target_ind - output_ind
+
+        plot(
+            images=[target_ind, input_ind, output_ind, residual_ind],
+            caption=["Target", "Input", "Recon", "Residual"],
+            cbar=True,
+            scale_row=0,
+            same_scale=[0, 1, 2],
+            subtitles=[blank_titles, tit_in, tit_out, blank_titles],
+            suptitle=f"Worst {key}: ({name})",
+        )

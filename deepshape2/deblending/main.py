@@ -18,7 +18,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender_10_200.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_deblender_30_200.pt"
 
 
 # Torch Parameters
@@ -36,24 +36,26 @@ random.seed(2024)
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(38)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(30)]
 
-split_idx = int(0.8 * len(group_names))
-group_names_train, group_names_val = group_names[:split_idx], group_names[split_idx:]
+
+group_names_train, group_names_val = group_names[:25], group_names[25:]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky.h5",
+    path=DATA_DIR + "sky2.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
+    min_flux=30e-6,
 )
 
 val_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky.h5",
+    path=DATA_DIR + "sky2.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
+    min_flux=30e-6,
 )
 
 # Initialize DataLoaders
@@ -69,7 +71,7 @@ val_loader = DataLoader(
 model = VAE().to(device)
 
 # %% Train the model and plot results
-n_epochs = 201
+n_epochs = 101
 
 scheduler_params = {"factor": 0.5, "patience": 15, "min_lr": lr_init / (2**5)}
 

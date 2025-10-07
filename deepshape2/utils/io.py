@@ -7,7 +7,7 @@ import pandas as pd
 from colorist import Color
 from omegaconf import OmegaConf
 
-_all__ = ["load", "save", "load_h5", "load_config"]
+_all__ = ["load", "save", "load_h5", "load_config", "get_tqdm"]
 
 
 # Default config location (relative to project root)
@@ -58,3 +58,9 @@ def load_h5(path, mode="r", delete_if_exists=False):
         os.remove(path)
 
     return h5py.File(path, mode)
+
+
+def get_tqdm(desc, unit="batch"):
+    cfg = OmegaConf.load("default.yml")
+    tqdm_cfg = OmegaConf.to_container(cfg.tqdm, resolve=True)
+    return tqdm_cfg

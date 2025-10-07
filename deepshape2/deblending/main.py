@@ -6,10 +6,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data import loaders
-from deepshape2.deblending.training import predict, train
+from deepshape2.deblending.training import plot_bad_cases, predict, train
 from deepshape2.models.vae import VAE
 from deepshape2.utils import get_freest_gpu, load_config
-from deepshape2.visualization import plot, plot_losses
+from deepshape2.visualization import plot_losses
 
 # %% Set default parameters
 cfg = load_config()
@@ -18,7 +18,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender_30_200.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_deblender_10_200_5e7.pt"
 
 
 # Torch Parameters
@@ -36,26 +36,26 @@ random.seed(2024)
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(30)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(38)]
 
-
-group_names_train, group_names_val = group_names[:25], group_names[25:]
+split_idx = int(0.8 * len(group_names))
+group_names_train, group_names_val = group_names[:split_idx], group_names[split_idx:]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky2.h5",
+    path=DATA_DIR + "sky.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
-    min_flux=30e-6,
+    scale_fac=5e7,
 )
 
 val_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky2.h5",
+    path=DATA_DIR + "sky.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
-    min_flux=30e-6,
+    scale_fac=5e7,
 )
 
 # Initialize DataLoaders
@@ -71,7 +71,7 @@ val_loader = DataLoader(
 model = VAE().to(device)
 
 # %% Train the model and plot results
-n_epochs = 101
+n_epochs = 151
 
 scheduler_params = {"factor": 0.5, "patience": 15, "min_lr": lr_init / (2**5)}
 
@@ -122,54 +122,8 @@ plot_losses(
     skip=0,
 )
 
-metrics = predict(model, best_weights, val_loader, device)
+metrics = predict(model, best_weights, val_loader, device, inv_scale=None)
 
 # %% Plot the worst cases
-
-inputs = metrics["input"]
-outputs = metrics["output"]
-targets = metrics["targets"]
-
-psnr_out = metrics["psnr_out"]
-ssim_out = metrics["ssim_out"]
-
-psnr_in = metrics["psnr_in"]
-ssim_in = metrics["ssim_in"]
-
-
-names = ["PSNR", "SSIM"]
-
-for stat, name in zip([psnr_out, ssim_out], names):
-    ind = np.argsort(stat)[:5]
-
-    tit_in = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_in[ind], psnr_in[ind])]
-    tit_out = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[ind], psnr_out[ind])]
-    blank_titles = [None] * len(tit_in)
-
-    plot(
-        images=[targets[ind], inputs[ind], outputs[ind], targets[ind] - outputs[ind]],
-        caption=["Target", "Input", "Recon", "Residual"],
-        cbar=True,
-        scale_row=0,
-        same_scale=[0, 1, 2],
-        subtitles=[blank_titles, tit_in, tit_out, blank_titles],
-        suptitle=f"Worst Reconstructions ({name})",
-    )
-
-
-for stat, name in zip([psnr_in, ssim_in], names):
-    ind = np.argsort(stat)[:5]
-
-    tit_in = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_in[ind], psnr_in[ind])]
-    tit_out = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[ind], psnr_out[ind])]
-    blank_titles = [None] * len(tit_in)
-
-    plot(
-        images=[targets[ind], inputs[ind], outputs[ind], targets[ind] - outputs[ind]],
-        caption=["Target", "Input", "Recon", "Residual"],
-        cbar=True,
-        scale_row=0,
-        same_scale=[0, 1, 2],
-        subtitles=[blank_titles, tit_in, tit_out, blank_titles],
-        suptitle=f"Worst Inputs ({name})",
-    )
+plot_bad_cases(metrics, category="input")
+plot_bad_cases(metrics, category="output")

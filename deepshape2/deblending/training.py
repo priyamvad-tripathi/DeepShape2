@@ -8,8 +8,17 @@ import torch.nn.functional as F
 from colorist import Color
 from tqdm import tqdm
 
-from deepshape2.utils import load_ckp, psnr_batch, save_ckp, ssim_batch, time_string
+from deepshape2.utils import (
+    get_tqdm,
+    load_ckp,
+    psnr_batch,
+    save_ckp,
+    ssim_batch,
+    time_string,
+)
 from deepshape2.visualization import plot
+
+tqdm_kwargs = get_tqdm()
 
 
 # %% Loss Functions
@@ -152,7 +161,7 @@ def train(
         model.train()
         total_loss, recon_losses, kl_losses = [], [], []
 
-        with tqdm(total=len(train_loader), unit=" batch", colour="green") as pbar:
+        with tqdm(total=len(train_loader), unit=" batch", **tqdm_kwargs) as pbar:
             pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
             for inp, target in train_loader:
@@ -304,7 +313,7 @@ def predict(
     targets, inputs, outputs = [], [], []
 
     with torch.inference_mode():
-        with tqdm(total=len(val_loader), unit=" batch", colour="green") as pbar:
+        with tqdm(total=len(val_loader), unit=" batch", **tqdm_kwargs) as pbar:
             for inp, target in val_loader:
                 pbar.update(1)
 

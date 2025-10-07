@@ -60,7 +60,8 @@ def load_h5(path, mode="r", delete_if_exists=False):
     return h5py.File(path, mode)
 
 
-def get_tqdm(desc, unit="batch"):
-    cfg = OmegaConf.load("default.yml")
+def get_tqdm(path: str = None):
+    cfg_path = path or DEFAULT_CONFIG_PATH
+    cfg = OmegaConf.load(cfg_path)
     tqdm_cfg = OmegaConf.to_container(cfg.tqdm, resolve=True)
     return tqdm_cfg

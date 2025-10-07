@@ -21,11 +21,8 @@ VAE_lr_init: 1e-4 # Initial learning rate for VAE
 
 # TQDM parameters
 tqdm:
-  ncols: 80
+  ncols: 200
   dynamic_ncols: false
-  ascii: true
-  bar_format: "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-  leave: true
   smoothing: 0.1
   colour: "green"
 

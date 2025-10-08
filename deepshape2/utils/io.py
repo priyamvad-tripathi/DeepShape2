@@ -10,8 +10,12 @@ from omegaconf import OmegaConf
 _all__ = ["load", "save", "load_h5", "load_config", "get_tqdm"]
 
 
-# Default config location (relative to project root)
-DEFAULT_CONFIG_PATH = "/home/tripathi/DeepShape2/deepshape2/config/default.yaml"
+# Compute path relative to this file's directory
+DEFAULT_CONFIG_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)),  # up one level from utils/
+    "config",
+    "default.yaml",
+)
 
 
 def load_config(path: str = None):

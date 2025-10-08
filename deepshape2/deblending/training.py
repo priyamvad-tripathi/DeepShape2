@@ -63,7 +63,7 @@ def psnr_batch_torch(true_images, recon_images, eps=1e-10):
     return -psnr  # returns PSNR for each image in the batch
 
 
-def validation_loss(model, val_loader, device, inv_scale=False):
+def validation_loss(model, val_loader, device, scale_fac):
     model.eval()
     val_loss_all = []
 
@@ -75,9 +75,8 @@ def validation_loss(model, val_loader, device, inv_scale=False):
             out = model(inp)
             out = out[0]
 
-            if inv_scale:
-                out = torch.sinh(out) / 1e7
-                target = torch.sinh(target) / 1e7
+            out = torch.sinh(out) / scale_fac
+            target = torch.sinh(target) / scale_fac
 
             batch_psnr = psnr_batch_torch(target, out)
             val_loss_all.append(batch_psnr)
@@ -88,11 +87,8 @@ def validation_loss(model, val_loader, device, inv_scale=False):
 
 
 # %% Scaling function
-def inverse_scale(
-    arr: np.ndarray, scale_fac: float = 1e7, arcsin: bool = True
-) -> np.ndarray:
-    if arcsin:
-        arr = np.sinh(arr)
+def inverse_scale(arr: np.ndarray, scale_fac: float = 1e7) -> np.ndarray:
+    arr = np.sinh(arr)
     arr = arr / scale_fac
     return arr
 
@@ -128,7 +124,6 @@ def train(
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
-    inv_scale = kwargs.get("inv_scale", False)
 
     # Optional scheduler
     scheduler = None
@@ -158,6 +153,8 @@ def train(
 
     except (AttributeError, FileNotFoundError, TypeError):
         print("No saved checkpoints found. Starting from scratch.")
+
+    scale_fac = train_loader.dataset.scale_fac
 
     # Training loop
     for epoch in range(epochs):
@@ -217,7 +214,7 @@ def train(
             # Validation
             if val_loader:
                 val_loss = validation_loss(
-                    model, val_loader, device=device, inv_scale=inv_scale
+                    model, val_loader, device=device, scale_fac=scale_fac
                 )
                 val_loss_list.append(val_loss)
 
@@ -310,9 +307,9 @@ def predict(
     weights,
     val_loader,
     device,
+    scale_fac,
     print_stats=True,
     n=5,
-    inv_scale={"arcsin": True, "scale_fac": 1e7},
 ):
     model.load_state_dict(weights)
     model.eval()
@@ -339,10 +336,9 @@ def predict(
     outputs = np.concatenate(outputs)
     inputs = np.concatenate(inputs)
 
-    if inv_scale:
-        targets = inverse_scale(targets, **inv_scale)
-        outputs = inverse_scale(outputs, **inv_scale)
-        inputs = inverse_scale(inputs, **inv_scale)
+    targets = inverse_scale(targets, scale_fac)
+    outputs = inverse_scale(outputs, scale_fac)
+    inputs = inverse_scale(inputs, scale_fac)
 
     # Compute image quality metrics
     psnr_out = psnr_batch(targets, outputs)
@@ -390,10 +386,10 @@ def predict(
 
 def plot_bad_cases(
     metrics,
+    scale_fac,
     names=["PSNR", "SSIM"],
     category="input",
     n=5,
-    inv_scale={"arcsin": True, "scale_fac": 1e7},
 ):
     psnr_out = metrics["psnr_out"]
     ssim_out = metrics["ssim_out"]
@@ -425,10 +421,9 @@ def plot_bad_cases(
         input_ind = inputs[ind]
         output_ind = outputs[ind]
 
-        if inv_scale:
-            target_ind = inverse_scale(target_ind, **inv_scale)
-            input_ind = inverse_scale(input_ind, **inv_scale)
-            output_ind = inverse_scale(output_ind, **inv_scale)
+        target_ind = inverse_scale(target_ind, scale_fac)
+        input_ind = inverse_scale(input_ind, scale_fac)
+        output_ind = inverse_scale(output_ind, scale_fac)
 
         residual_ind = target_ind - output_ind
 

@@ -77,7 +77,7 @@ def get_tqdm(path: str = None):
     else:
         bar_format = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
         return dict(
-            ncols=200,
+            ncols=80,
             dynamic_ncols=False,
             ascii=True,
             smoothing=0.1,

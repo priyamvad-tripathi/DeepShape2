@@ -18,7 +18,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender_10_200_5e7.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_deblender_10_200_inv_scale.pt"
 
 
 # Torch Parameters
@@ -47,7 +47,6 @@ train_dataset = loaders.BlendDataset(
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
-    scale_fac=5e7,
 )
 
 val_dataset = loaders.BlendDataset(
@@ -55,16 +54,25 @@ val_dataset = loaders.BlendDataset(
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
-    scale_fac=5e7,
 )
 
 # Initialize DataLoaders
 train_loader = DataLoader(
-    train_dataset, batch_size=32, shuffle=True, num_workers=4, pin_memory=True
+    train_dataset,
+    batch_size=32,
+    shuffle=True,
+    num_workers=4,
+    pin_memory=True,
+    drop_last=True,
 )
 
 val_loader = DataLoader(
-    val_dataset, batch_size=32, shuffle=False, num_workers=4, pin_memory=True
+    val_dataset,
+    batch_size=32,
+    shuffle=False,
+    num_workers=4,
+    pin_memory=True,
+    drop_last=True,
 )
 
 # Load the VAE model

@@ -63,7 +63,7 @@ def psnr_batch_torch(true_images, recon_images, eps=1e-10):
     return -psnr  # returns PSNR for each image in the batch
 
 
-def validation_loss(model, val_loader, device):
+def validation_loss(model, val_loader, device, inv_scale=False):
     model.eval()
     val_loss_all = []
 
@@ -73,8 +73,13 @@ def validation_loss(model, val_loader, device):
             target = target.to(device)
 
             out = model(inp)
+            out = out[0]
 
-            batch_psnr = psnr_batch_torch(target, out[0])
+            if inv_scale:
+                out = torch.sinh(out) / 1e7
+                target = torch.sinh(target) / 1e7
+
+            batch_psnr = psnr_batch_torch(target, out)
             val_loss_all.append(batch_psnr)
 
     # Concatenate and average
@@ -123,6 +128,7 @@ def train(
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
+    inv_scale = kwargs.get("inv_scale", False)
 
     # Optional scheduler
     scheduler = None
@@ -161,7 +167,7 @@ def train(
         model.train()
         total_loss, recon_losses, kl_losses = [], [], []
 
-        with tqdm(total=len(train_loader), unit=" batch", **tqdm_kwargs) as pbar:
+        with tqdm(total=len(train_loader), **tqdm_kwargs) as pbar:
             pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
             for inp, target in train_loader:
@@ -210,7 +216,9 @@ def train(
 
             # Validation
             if val_loader:
-                val_loss = validation_loss(model, val_loader, device=device)
+                val_loss = validation_loss(
+                    model, val_loader, device=device, inv_scale=inv_scale
+                )
                 val_loss_list.append(val_loss)
 
                 if scheduler:
@@ -244,7 +252,7 @@ def train(
             # scripted_model.save(filename[:-3] + ".jit")
             is_final_epoch = (epoch + 1) == epochs
             is_save_epoch = (epoch + 1) % save_freq == 0
-            if is_final_epoch or is_save_epoch:
+            if is_final_epoch or is_save_epoch or is_best:
                 checkpoint_data = {
                     "epoch": epoch + 1,
                     "model": model,
@@ -313,7 +321,7 @@ def predict(
     targets, inputs, outputs = [], [], []
 
     with torch.inference_mode():
-        with tqdm(total=len(val_loader), unit=" batch", **tqdm_kwargs) as pbar:
+        with tqdm(total=len(val_loader), **tqdm_kwargs) as pbar:
             for inp, target in val_loader:
                 pbar.update(1)
 

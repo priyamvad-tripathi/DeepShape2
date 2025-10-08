@@ -60,10 +60,10 @@ if __name__ == "__main__":
 
     NUM_DASK_WORKERS = args.n_workers
     NUM_PATCHES = args.n_patches
-    MIN_FLUX = 20e-6  # Min flux in Jy for extracting stamps
+    MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
 
-    data = load_h5(DATA_DIR + "sky.h5", mode="a", delete_if_exists=False)
-    #data.attrs["min_flux_for_stamps"] = MIN_FLUX
+    data = load_h5(DATA_DIR + "sky_50.h5", mode="a", delete_if_exists=False)
+    # data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
     start = time.time()
     with (
@@ -85,9 +85,6 @@ if __name__ == "__main__":
                 f"{Color.GREEN}Simulating patch {nl + 1}/{NUM_PATCHES} at location ({location[0]:.3f}, {location[1]:.3f}){Color.OFF}"
             )
 
-            if nl<30:
-                continue
-
             group = data.create_group(f"patch_{nl + 1:03d}")
 
             # Extract galaxies at patch location
@@ -102,8 +99,6 @@ if __name__ == "__main__":
 
             locs_pix = patch_out[["pix_x", "pix_y"]].values
             mask = patch_out["flux_mask"].values
-
-            stamp_flux = patch_out["flux"].values[mask]
 
             centers = locs_pix[mask]
 
@@ -128,9 +123,7 @@ if __name__ == "__main__":
                 compression="gzip",
                 chunks=(1, 256, 256),
             )
-            group.create_dataset(
-                "stamp_flux", data=stamp_flux, compression="gzip", chunks=(1024,)
-            )
+
             post_step("field image simulation", start, client, data)
 
             darr = da.from_array(sky_array, chunks=(5000, 5000))

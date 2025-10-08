@@ -48,6 +48,7 @@ NPIX_SKY = cfg["NPIX_SKY"]
 
 NPIX_STAMP = 256
 
+TRECS_DIR = cfg["TRECS_DIR"]
 # %% Catalogue Processing Functions
 
 
@@ -92,7 +93,7 @@ def generate_patch_locations(
 
 
 def random_patch(location, catalogue_type="wide", patch_size=1.0):
-    catalogue = pd.read_pickle(f"/scratch/tripathi/TRECS/catalog_{catalogue_type}.pkl")
+    catalogue = pd.read_pickle(f"{TRECS_DIR}/catalog_{catalogue_type}.pkl")
 
     # Choose patch location
     x0, y0 = location

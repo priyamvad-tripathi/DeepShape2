@@ -25,7 +25,9 @@ tqdm:
   dynamic_ncols: false
   smoothing: 0.1
   colour: "green"
+  ascii: True
   unit: "batch"
+  
 # Paths
 MODEL_DIR: "/scratch/tripathi/DS2/Model_weights/"
 DATA_DIR: "/scratch/tripathi/DS2/Data/"

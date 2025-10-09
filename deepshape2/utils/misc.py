@@ -4,11 +4,13 @@ import time
 from functools import reduce
 
 from colorist import Color
+from tqdm import tqdm
 
 __all__ = [
     "time_string",
     "trim_memory",
     "post_step",
+    "get_progress_bar",
 ]
 
 
@@ -46,3 +48,38 @@ def post_step(step_name: str, start_time: float, client=None, data=None):
             data.flush()
         except Exception as e:
             print(f"Warning: data.flush() failed: {e}")
+
+
+class DummyTqdm:
+    """A no-op tqdm replacement for non-interactive environments."""
+
+    def __init__(self, total=None, **kwargs):
+        self.total = total
+        self.n = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+    # Dummy methods that do nothing
+    def update(self, n=1):
+        self.n += n
+        return self
+
+    def set_postfix(self, postfix=None, **kwargs):
+        return self
+
+    def set_description(self, desc=None, **kwargs):
+        return self
+
+
+def get_progress_bar(enabled, total=None, **kwargs):
+    """
+    Return tqdm if enabled, else a no-op context manager.
+    """
+    if enabled:
+        return tqdm(total=total, **kwargs)
+    else:
+        return DummyTqdm(total=total)

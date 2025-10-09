@@ -1,6 +1,5 @@
 import os
 import pickle
-import sys
 from pathlib import Path
 
 import h5py
@@ -66,22 +65,7 @@ def load_h5(path, mode="r", delete_if_exists=False):
 
 
 def get_tqdm(path: str = None):
-    # Check if output is a terminal
-    is_tty = sys.stdout.isatty()
-
-    if is_tty:
-        cfg_path = path or DEFAULT_CONFIG_PATH
-        cfg = OmegaConf.load(cfg_path)
-        tqdm_kwargs = OmegaConf.to_container(cfg.tqdm, resolve=True)
-        return tqdm_kwargs
-    else:
-        bar_format = "{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]"
-        return dict(
-            ncols=80,
-            dynamic_ncols=False,
-            ascii=True,
-            smoothing=0.1,
-            bar_format=bar_format,
-            unit="batch",
-            leave=True,
-        )
+    cfg_path = path or DEFAULT_CONFIG_PATH
+    cfg = OmegaConf.load(cfg_path)
+    tqdm_kwargs = OmegaConf.to_container(cfg.tqdm, resolve=True)
+    return tqdm_kwargs

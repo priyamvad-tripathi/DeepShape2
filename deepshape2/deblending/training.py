@@ -6,9 +6,9 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from colorist import Color
-from tqdm import tqdm
 
 from deepshape2.utils import (
+    get_progress_bar,
     get_tqdm,
     load_ckp,
     psnr_batch,
@@ -105,7 +105,7 @@ def train(
 ):
     # Initialize tracking variables
     start_time = time.time()
-    best_val_mse = np.inf
+    best_val_loss = np.inf
     best_weights = None
     current_epoch = 0
     best_epoch = 0
@@ -115,7 +115,7 @@ def train(
         [],
         [],
         [],
-        [],
+        [np.inf],
     )
 
     # Configuration from kwargs
@@ -124,6 +124,7 @@ def train(
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
+    tqdm_enabled = kwargs.get("tqdm_enabled", True)
 
     # Optional scheduler
     scheduler = None
@@ -131,7 +132,6 @@ def train(
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
             optimizer, **scheduler_params
         )
-    lr_init = np.inf
 
     print(f"Running on device: {device}")
 
@@ -139,7 +139,7 @@ def train(
         model, optimizer, checkpoint = load_ckp(filename, model, optimizer, device)
 
         current_epoch = checkpoint["epoch"]
-        best_val_mse = checkpoint.get("best_val_mse", np.inf)
+        best_val_loss = checkpoint.get("best_val_loss", np.inf)
         best_weights = checkpoint.get("best_weights")
         val_loss_list = checkpoint.get("val_loss_list", [])
         recon_loss_list = checkpoint.get("recon_loss_list", [])
@@ -164,9 +164,15 @@ def train(
         model.train()
         total_loss, recon_losses, kl_losses = [], [], []
 
-        with tqdm(total=len(train_loader), **tqdm_kwargs) as pbar:
-            pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
+        if scheduler is not None:
+            current_lr = optimizer.param_groups[0]["lr"]
+            new_lr = current_lr < lr_list[-1]
+            lr_list.append(current_lr)
 
+        pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
+        pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
+
+        with pbar:
             for inp, target in train_loader:
                 inp, target = inp.to(device), target.to(device)
 
@@ -191,12 +197,12 @@ def train(
                     "KL Loss": f"{np.mean(kl_losses):.{precision}e}",
                 }
 
-                if scheduler:
-                    current_lr = optimizer.param_groups[0]["lr"]
-                    postfix["LR"] = f"{current_lr:.2e}"
-                    if current_lr < lr_init:
-                        print(f"Changing learning rate to {current_lr:.2e}")
-                        lr_init = current_lr
+                if current_lr is not None:
+                    postfix["LR"] = (
+                        f"{Color.RED}{current_lr:.2e}{Color.OFF}"
+                        if new_lr
+                        else f"{current_lr:.2e}"
+                    )
 
                 pbar.update(1)
                 pbar.set_postfix(postfix)
@@ -209,7 +215,20 @@ def train(
             train_loss_list.append(epoch_loss)
             recon_loss_list.append(epoch_recon)
             kl_loss_list.append(epoch_kl)
-            lr_list.append(optimizer.param_groups[0]["lr"])
+
+            # Print updates if tqdm is disabled
+            if not tqdm_enabled:
+                line0 = f"Epoch {epoch + 1}/{epochs}"
+                if current_lr is not None:
+                    line0 += f" | LR: {current_lr:.2e}"
+                    if new_lr:
+                        line0 += " NEW"
+                print(line0)
+                line = (
+                    f"Train Loss: {epoch_loss:.{precision}e} | "
+                    f"Recon: {epoch_recon:.{precision}e} | "
+                    f"KL: {epoch_kl:.{precision}e}"
+                )
 
             # Validation
             if val_loader:
@@ -222,10 +241,10 @@ def train(
                     scheduler.step(val_loss)
 
                 # Update best model
-                is_best = val_loss < best_val_mse
+                is_best = val_loss < best_val_loss
                 if is_best and epoch >= 5:  # int(0.02 * epochs):
                     best_epoch = epoch
-                    best_val_mse = val_loss
+                    best_val_loss = val_loss
                     best_weights = copy.deepcopy(model.state_dict())
 
                 # Prepare metrics for display
@@ -240,8 +259,16 @@ def train(
                     ),
                 }
                 pbar.set_postfix(pfix)
+
+                if not tqdm_enabled:
+                    marker = "BEST" if is_best else ""
+                    line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
             else:
                 best_weights = copy.deepcopy(model.state_dict())
+
+            if not tqdm_enabled:
+                print(line)
+                print("-" * 50)
 
         # Save final checkpoint
         if filename:
@@ -256,13 +283,13 @@ def train(
                     "optimizer": optimizer,
                     "best_weights": best_weights,
                     "filename": filename,
-                    "best_val_mse": best_val_mse,
+                    "best_val_loss": best_val_loss,
                     "val_loss_list": val_loss_list,
                     "recon_loss_list": recon_loss_list,
                     "kl_loss_list": kl_loss_list,
                     "beta": beta,
                     "train_loss_list": train_loss_list,
-                    "lr_list": lr_list,
+                    "lr_list": lr_list[1:],
                 }
                 if scheduler:
                     checkpoint_data["scheduler_state_dict"] = copy.deepcopy(
@@ -310,15 +337,19 @@ def predict(
     scale_fac,
     print_stats=True,
     n=5,
+    tqdm_enabled=True,
 ):
-    model.load_state_dict(weights)
+    if weights is not None:
+        model.load_state_dict(weights)
     model.eval()
 
     # Accumulate results
     targets, inputs, outputs = [], [], []
 
     with torch.inference_mode():
-        with tqdm(total=len(val_loader), **tqdm_kwargs) as pbar:
+        pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
+
+        with pbar:
             for inp, target in val_loader:
                 pbar.update(1)
 

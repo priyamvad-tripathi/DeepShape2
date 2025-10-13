@@ -1,17 +1,17 @@
 # %% Import Libraries
 import bisect
 import os
-import random
+from typing import List, Optional, Tuple, Union
 
 import h5py
 import numpy as np
 import torch
-from torch.utils.data import Dataset, get_worker_info
+from torch.utils.data import DataLoader, Dataset, get_worker_info
+
+from deepshape2.utils import set_seed
 
 # Seeds to ensure reproducibility
-torch.manual_seed(2024)
-np.random.seed(2024)
-random.seed(2024)
+set_seed()
 
 
 # %% Deblending Loader
@@ -208,3 +208,153 @@ class BlendDataset(Dataset):
                     f.close()
                 except Exception:
                     pass
+
+
+# %% Shape Measurement Loader
+class ImageDataset(Dataset):
+    """
+    PyTorch Dataset for loading images and ellipticities from an HDF5 file.
+
+    Parameters
+    ----------
+    path : str
+        Path to the HDF5 file.
+    x_key : list of str
+        Keys for the input images (e.g., ['dirty_image', 'PSF']).
+    y_key : list of str
+        Key(s) for the target (e.g., ellipticity).
+    peak : float, optional
+        If provided, applies a cutoff using the 'Peak' dataset.
+    transform : callable, optional
+        Transform function applied to input images.
+    scale : bool, default=True
+        Whether to normalize input images to [0, 1].
+    """
+
+    def __init__(
+        self,
+        path: str,
+        x_key: List[str],
+        y_key: Optional[List[str]] = None,
+        transform: Optional[callable] = None,
+        scale: bool = True,
+    ):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"HDF5 file not found: {path}")
+
+        self.hf = h5py.File(path, "r")
+        self.x_key = x_key
+        self.y_key = y_key or []
+        self.transform = transform
+        self.scale = scale
+
+    def __len__(self) -> int:
+        return len(self.hf[self.x_key[0]])
+
+    @staticmethod
+    def _normalize(img: np.ndarray) -> np.ndarray:
+        """Normalize image to [0, 1] range."""
+        img_min = img.min()
+        img_range = np.ptp(img)
+        return (img - img_min) / img_range if img_range > 0 else img
+
+    def __getitem__(
+        self, idx: int
+    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        # Load all input channels and normalize if needed
+        x = [self.hf[k][idx] for k in self.x_key]
+        if self.scale:
+            x = [self._normalize(im) for im in x]
+
+        x = np.stack(x, axis=0)  # shape: (C, H, W)
+        x = torch.from_numpy(x).float()
+
+        if self.transform is not None:
+            x = self.transform(x)
+
+        if self.y_key:
+            y = torch.from_numpy(self.hf[self.y_key[0]][idx]).float()
+            return x, y
+        return x
+
+    def close(self):
+        """Manually close the HDF5 file."""
+        if self.hf:
+            self.hf.close()
+
+
+def dataloader(
+    path: str,
+    x_key: List[str],
+    y_key: Optional[List[str]],
+    split: Union[List[float], int],
+    batch_size: Union[List[int], int],
+    **kwargs,
+):
+    """
+    Create PyTorch DataLoader(s) from an HDF5 dataset.
+
+    Parameters
+    ----------
+    path : str
+        Path to HDF5 dataset.
+    x_key : list of str
+        Keys for the input images.
+    y_key : list of str
+        Keys for the target values.
+    split : list of floats or int
+        - If list: [train_split, val_split] fractions (should sum to 1).
+        - If int: dataset size (no split).
+    batch_size : list of int or int
+        Batch size(s) for training and validation sets.
+    **kwargs : dict
+        Additional arguments for `ImageDataset`.
+
+    Returns
+    -------
+    DataLoader or (DataLoader, DataLoader)
+        Returns one or two DataLoaders depending on split type.
+    """
+
+    dataset = ImageDataset(path=path, x_key=x_key, y_key=y_key, **kwargs)
+
+    if isinstance(split, (list, tuple)):
+        if not np.isclose(sum(split), 1.0):
+            raise ValueError("Split ratios must sum to 1.")
+        if not isinstance(batch_size, (list, tuple)) or len(batch_size) != len(split):
+            raise ValueError("`batch_size` must match number of splits.")
+
+        n_total = len(dataset)
+        lengths = [int(n_total * s) for s in split]
+        # Ensure rounding errors don't lose samples
+        lengths[-1] = n_total - sum(lengths[:-1])
+
+        train_ds, val_ds = torch.utils.data.random_split(dataset, lengths)
+        train_loader = DataLoader(
+            train_ds,
+            batch_size=batch_size[0],
+            shuffle=True,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=True,
+        )
+        val_loader = DataLoader(
+            val_ds,
+            batch_size=batch_size[1],
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=True,
+        )
+        return train_loader, val_loader
+
+    else:
+        loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=4,
+            pin_memory=True,
+            drop_last=True,
+        )
+        return loader

@@ -1,14 +1,12 @@
 # %%Import Libraries
-import random
-
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data import loaders
 from deepshape2.deblending import plot_bad_cases, predict, train
-from deepshape2.models.vae import VAE
-from deepshape2.utils import get_freest_gpu, load_config
+from deepshape2.models import VAE
+from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_losses
 
 scale_fac = 1e7
@@ -21,19 +19,9 @@ lr_init = cfg["VAE_lr_init"]
 
 loc_weights = cfg["MODEL_DIR"] + f"vae_deblender_{scale_fac:.0e}.pt"
 
-
 # Torch Parameters
-ndev = get_freest_gpu()
-
-torch.cuda.set_device(ndev)
-torch.cuda.empty_cache()
-device = torch.device(f"cuda:{ndev}")
-
-# Seed for reproducibility
-torch.manual_seed(2024)
-np.random.seed(2024)
-random.seed(2024)
-
+device = get_freest_gpu(set_device=True)
+set_seed()
 
 # %% Load Data into loaders
 

@@ -1,16 +1,14 @@
 # %%Import Libraries
-import random
 
-import numpy as np
 import torch
 import torch.nn as nn
 
+from deepshape2.utils import set_seed
+
 # Seed for reproducibility
-torch.manual_seed(2024)
-np.random.seed(2024)
-random.seed(2024)
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = True
+set_seed(2024)
+
+__all__ = ["VAE", "MultiHeadSelfAttention2D"]
 
 
 # %% VAE Model Definition

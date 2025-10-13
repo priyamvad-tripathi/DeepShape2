@@ -12,21 +12,30 @@ torch.manual_seed(2024)
 np.random.seed(2024)
 random.seed(2024)
 
-__all__ = ["get_freest_gpu", "save_ckp", "load_ckp"]
+__all__ = ["get_freest_gpu", "save_ckp", "load_ckp", "set_seed"]
 
 
 # %%
-def get_freest_gpu():
+def get_freest_gpu(set_device=False):
     """Return the index of the GPU with the most free memory."""
     try:
         output = subprocess.check_output(
             ["nvidia-smi", "--query-gpu=memory.free", "--format=csv,nounits,noheader"]
         )
         memory_free = [int(x) for x in output.decode("utf-8").strip().split("\n")]
-        return int(torch.tensor(memory_free).argmax())
+        ndev = int(torch.tensor(memory_free).argmax())
     except Exception as e:
         print("Could not query GPUs:", e)
         return -1
+
+    if set_device:
+        torch.cuda.set_device(ndev)
+        torch.cuda.empty_cache()
+        device = torch.device(f"cuda:{ndev}")
+        print(f"Using device: {device}")
+        return device
+
+    return ndev
 
 
 def save_ckp(model, optimizer, filename, **kwargs):
@@ -59,3 +68,12 @@ def load_ckp(filename, model, optimizer, device):
     model.load_state_dict(checkpoint["model_state_dict"])
     optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
     return model, optimizer, checkpoint
+
+
+def set_seed(seed=2024):
+    """Function to set the random seed for reproducibility."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = True

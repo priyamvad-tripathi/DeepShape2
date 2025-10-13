@@ -4,93 +4,16 @@ import time
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from colorist import Color
 
-from deepshape2.utils import (
-    get_progress_bar,
-    get_tqdm,
-    load_ckp,
-    psnr_batch,
-    save_ckp,
-    ssim_batch,
-    time_string,
-)
+from deepshape2.deblending import psnr_torch, ssim_torch, vae_loss, validation_loss
+from deepshape2.utils import get_progress_bar, get_tqdm, load_ckp, save_ckp, time_string
 from deepshape2.visualization import plot
 
 tqdm_kwargs = get_tqdm()
 
 
-# %% Loss Functions
-def circ_mask(device, height=128, width=128, radius=64):
-    y, x = np.ogrid[:height, :width]
-    center = (height // 2, width // 2)
-    dist_from_center = np.sqrt((x - center[1]) ** 2 + (y - center[0]) ** 2)
-    mask = (dist_from_center <= radius).astype(float)
-    mask = (
-        torch.tensor(mask, dtype=torch.float32, device=device).unsqueeze(0).unsqueeze(0)
-    )
-    return mask
-
-
-def vae_loss(target, recon, mu, logvar, beta, device, alpha=0.7):
-    mask = circ_mask(device)
-    mask = mask.repeat(target.shape[0], 1, 1, 1)
-
-    # Reconstruction Loss (MSE or BCE depending on your data)
-    recon_loss = F.mse_loss(target, recon, reduction="sum")
-    central_loss = F.mse_loss(target * mask, recon * mask, reduction="sum")
-
-    # KL Divergence Loss
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
-
-    total_loss = recon_loss * (1 - alpha) + central_loss * alpha + beta * kl_loss
-    return total_loss, recon_loss, kl_loss
-
-
-def psnr_batch_torch(true_images, recon_images, eps=1e-10):
-    if true_images.shape != recon_images.shape:
-        raise ValueError("Shapes of true and reconstructed images must match.")
-
-    # Mean squared error per image
-    mse = F.mse_loss(recon_images, true_images, reduction="none")
-    mse = mse.flatten(1).mean(dim=1)  # mean over pixels per image
-
-    # Max value per image
-    max_vals = true_images.flatten(1).max(dim=1).values
-
-    psnr = 10 * torch.log10((max_vals**2) / (mse + eps))
-    return -psnr  # returns PSNR for each image in the batch
-
-
-def validation_loss(model, val_loader, device, scale_fac):
-    model.eval()
-    val_loss_all = []
-
-    with torch.inference_mode():
-        for inp, target in val_loader:
-            inp = inp.to(device)
-            target = target.to(device)
-
-            out = model(inp)
-            out = out[0]
-
-            out = torch.sinh(out) / scale_fac
-            target = torch.sinh(target) / scale_fac
-
-            batch_psnr = psnr_batch_torch(target, out)
-            val_loss_all.append(batch_psnr)
-
-    # Concatenate and average
-    all_psnrs = torch.cat(val_loss_all)
-    return all_psnrs.mean().item()
-
-
-# %% Scaling function
-def inverse_scale(arr: np.ndarray, scale_fac: float = 1e7) -> np.ndarray:
-    arr = np.sinh(arr)
-    arr = arr / scale_fac
-    return arr
+__all__ = ["train", "predict", "plot_bad_cases"]
 
 
 # %% Training Function
@@ -346,6 +269,9 @@ def predict(
     # Accumulate results
     targets, inputs, outputs = [], [], []
 
+    psnr_out_all, ssim_out_all = [], []
+    psnr_in_all, ssim_in_all = [], []
+
     with torch.inference_mode():
         pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
 
@@ -359,24 +285,37 @@ def predict(
 
                 inp = inp.to(device)
                 out = model(inp)
+                out = out[0]
 
-                outputs.append(out[0].cpu().numpy().squeeze())
+                outputs.append(out.cpu().numpy().squeeze())
+
+                target_sc = torch.sinh(target) / scale_fac
+                out_sc = torch.sinh(out) / scale_fac
+                inp_sc = torch.sinh(inp) / scale_fac
+
+                psnr_out = psnr_torch(target_sc, out_sc)
+                _, ssim_out = ssim_torch(target_sc, out_sc)
+
+                psnr_in = psnr_torch(target_sc, inp_sc)
+                _, ssim_in = ssim_torch(target_sc, inp_sc)
+
+                psnr_out_all.append(psnr_out.cpu())
+                ssim_out_all.append(ssim_out.cpu())
+
+                psnr_in_all.append(psnr_in.cpu())
+                ssim_in_all.append(ssim_in.cpu())
 
     # Concatenate batch-wise results
     targets = np.concatenate(targets)
     outputs = np.concatenate(outputs)
     inputs = np.concatenate(inputs)
 
-    targets = inverse_scale(targets, scale_fac)
-    outputs = inverse_scale(outputs, scale_fac)
-    inputs = inverse_scale(inputs, scale_fac)
-
     # Compute image quality metrics
-    psnr_out = psnr_batch(targets, outputs)
-    ssim_out = ssim_batch(targets, outputs)
+    psnr_out = torch.cat(psnr_out_all).numpy()
+    ssim_out = torch.cat(ssim_out_all).numpy()
 
-    psnr_in = psnr_batch(targets, inputs)
-    ssim_in = ssim_batch(targets, inputs)
+    psnr_in = torch.cat(psnr_in_all).numpy()
+    ssim_in = torch.cat(ssim_in_all).numpy()
 
     if print_stats:
         print(
@@ -415,6 +354,7 @@ def predict(
     return metrics
 
 
+# %% Plotting Function
 def plot_bad_cases(
     metrics,
     scale_fac,
@@ -452,9 +392,9 @@ def plot_bad_cases(
         input_ind = inputs[ind]
         output_ind = outputs[ind]
 
-        target_ind = inverse_scale(target_ind, scale_fac)
-        input_ind = inverse_scale(input_ind, scale_fac)
-        output_ind = inverse_scale(output_ind, scale_fac)
+        target_ind = np.sinh(target_ind) / scale_fac
+        input_ind = np.sinh(input_ind) / scale_fac
+        output_ind = np.sinh(output_ind) / scale_fac
 
         residual_ind = target_ind - output_ind
 

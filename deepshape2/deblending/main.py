@@ -6,11 +6,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data import loaders
-from deepshape2.deblending.training import plot_bad_cases, predict, train
+from deepshape2.deblending import plot_bad_cases, predict, train
 from deepshape2.models.vae import VAE
 from deepshape2.utils import get_freest_gpu, load_config
 from deepshape2.visualization import plot_losses
 
+scale_fac = 1e7
 # %% Set default parameters
 cfg = load_config()
 
@@ -18,7 +19,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender_10_200_inv_scale.pt"
+loc_weights = cfg["MODEL_DIR"] + f"vae_deblender_{scale_fac:.0e}.pt"
 
 
 # Torch Parameters
@@ -36,24 +37,26 @@ random.seed(2024)
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(38)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(30)]
 
-split_idx = int(0.8 * len(group_names))
-group_names_train, group_names_val = group_names[:split_idx], group_names[split_idx:]
+
+group_names_train, group_names_val = group_names[:25], group_names[25:]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky.h5",
+    path=DATA_DIR + "sky_50.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
+    scale_fac=scale_fac,
 )
 
 val_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky.h5",
+    path=DATA_DIR + "sky_50.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
+    scale_fac=scale_fac,
 )
 
 # Initialize DataLoaders
@@ -130,8 +133,8 @@ plot_losses(
     skip=0,
 )
 
-metrics = predict(model, best_weights, val_loader, device, inv_scale=None)
+metrics = predict(model, best_weights, val_loader, device, scale_fac=scale_fac)
 
 # %% Plot the worst cases
-plot_bad_cases(metrics, category="input")
-plot_bad_cases(metrics, category="output")
+plot_bad_cases(metrics, category="input", scale_fac=scale_fac)
+plot_bad_cases(metrics, category="output", scale_fac=scale_fac)

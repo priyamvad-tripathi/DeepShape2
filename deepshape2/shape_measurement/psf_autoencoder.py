@@ -17,7 +17,7 @@ from deepshape2.utils import (
     psnr_torch,
     save_ckp,
     set_seed,
-    ssim_torch,
+    ssim_batch,
     time_string,
 )
 from deepshape2.visualization import plot, plot_losses
@@ -28,7 +28,7 @@ tqdm_kwargs = get_tqdm()
 device = get_freest_gpu(set_device=True)
 set_seed(2024)
 
-model = Autoender().to(device)
+model = Autoender(attention=False).to(device)
 
 model = torch.compile(model)
 # %% Load Config and Data
@@ -36,7 +36,7 @@ cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
 
-loc_weights = cfg["MODEL_DIR"] + "autoencoder.pt"
+loc_weights = cfg["MODEL_DIR"] + "autoencoder_no_attention.pt"
 
 train_loader, val_loader = dataloader(
     path=DATA_DIR + "PSF_set.h5",
@@ -140,9 +140,8 @@ def train(
                 x = x.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                with torch.amp.autocast("cuda"):
-                    x_hat = model(x)
-                    loss = criterion(x, x_hat)
+                x_hat = model(x)
+                loss = criterion(x, x_hat)
 
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
@@ -273,8 +272,7 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
         model.load_state_dict(weights)
     model.eval()
 
-    inputs, outputs = [], []
-    psnr_all, ssim_all = [], []
+    inputs, outputs, psnr_all = [], [], []
 
     with torch.inference_mode():
         pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
@@ -290,16 +288,14 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
                 outputs.append(xhat.cpu().numpy().squeeze())
 
                 psnr_batch = psnr_torch(x, xhat).cpu().numpy()
-                _, ssim_batch = ssim_torch(x, xhat)
 
                 psnr_all.extend(psnr_batch)
-                ssim_all.extend(ssim_batch)
 
     inputs = np.concatenate(inputs)
     outputs = np.concatenate(outputs)
 
     psnr_out = torch.cat(psnr_all).numpy()
-    ssim_out = torch.cat(ssim_all).numpy()
+    ssim_out = ssim_batch(inputs, outputs)
 
     print(
         f"SSIM: Max {np.max(ssim_out):.03f} | Min {np.min(ssim_out):.03f} | Mean {np.mean(ssim_out):.03f}"

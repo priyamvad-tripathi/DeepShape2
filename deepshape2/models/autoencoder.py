@@ -16,7 +16,7 @@ class Autoender(nn.Module):
     Autoencoder model for encoding PSF data
     """
 
-    def __init__(self, attention=True):
+    def __init__(self, attention=False):
         super().__init__()
 
         self.expected_image_shape = (1, 128, 128)

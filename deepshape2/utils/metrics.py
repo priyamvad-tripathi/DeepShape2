@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from skimage.metrics import structural_similarity as ssim
+from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 __all__ = [
     "psnr_batch",
@@ -80,57 +81,35 @@ def psnr_torch(true_images: torch.Tensor, recon_images: torch.Tensor):
     return psnr
 
 
-def ssim_torch(targets, recons, data_range=None, window_size=11, K1=0.01, K2=0.03):
-    """Compute SSIM for a batch of grayscale images on GPU."""
-    if isinstance(targets, np.ndarray):
-        targets = torch.from_numpy(targets)
-    if isinstance(recons, np.ndarray):
-        recons = torch.from_numpy(recons)
+def ssim_torch(targets, recons):
+    """
+    Fast GPU SSIM computation for a batch of grayscale images.
 
+    Args:
+        targets: Tensor of shape (N, 1, H, W)
+        recons: Tensor of shape (N, 1, H, W)
+
+    Returns:
+        mean_ssim: float
+        all_ssim: np.array of shape (N,)
+    """
     targets = targets.float()
     recons = recons.float()
+    device = targets.device
 
-    device = (
-        targets.device
-        if targets.is_cuda
-        else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    )
-    targets, recons = targets.to(device), recons.to(device)
+    # Compute per-image min/max
+    min_t = targets.view(targets.shape[0], -1).min(dim=1)[0].view(-1, 1, 1, 1)
+    max_t = targets.view(targets.shape[0], -1).max(dim=1)[0].view(-1, 1, 1, 1)
 
-    if data_range is None:
-        data_range = recons.max() - recons.min()
+    # Normalize images per their own range
+    targets_norm = (targets - min_t) / (max_t - min_t)
+    min_r = recons.view(recons.shape[0], -1).min(dim=1)[0].view(-1, 1, 1, 1)
+    max_r = recons.view(recons.shape[0], -1).max(dim=1)[0].view(-1, 1, 1, 1)
+    recons_norm = (recons - min_r) / (max_r - min_r)
 
-    def _gaussian_window(size, sigma=1.5):
-        coords = torch.arange(size, dtype=torch.float32, device=device)
-        gauss = torch.exp(-((coords - size // 2) ** 2) / (2 * sigma**2))
-        gauss = gauss / gauss.sum()
-        window = (gauss[:, None] @ gauss[None, :]).unsqueeze(0).unsqueeze(0)
-        return window
-
-    window = _gaussian_window(window_size)
-
-    mu1 = F.conv2d(targets, window, padding=window_size // 2, groups=1)
-    mu2 = F.conv2d(recons, window, padding=window_size // 2, groups=1)
-
-    mu1_sq, mu2_sq, mu1_mu2 = mu1**2, mu2**2, mu1 * mu2
-    sigma1_sq = (
-        F.conv2d(targets * targets, window, padding=window_size // 2, groups=1) - mu1_sq
-    )
-    sigma2_sq = (
-        F.conv2d(recons * recons, window, padding=window_size // 2, groups=1) - mu2_sq
-    )
-    sigma12 = (
-        F.conv2d(targets * recons, window, padding=window_size // 2, groups=1) - mu1_mu2
-    )
-
-    C1 = (K1 * data_range) ** 2
-    C2 = (K2 * data_range) ** 2
-
-    ssim_map = ((2 * mu1_mu2 + C1) * (2 * sigma12 + C2)) / (
-        (mu1_sq + mu2_sq + C1) * (sigma1_sq + sigma2_sq + C2)
-    )
-
-    all_ssim = ssim_map.mean(dim=[1, 2, 3])
+    # Compute SSIM with reduction='none' for per-image SSIM
+    ssim_metric = StructuralSimilarityIndexMeasure(reduction="none").to(device)
+    all_ssim = ssim_metric(recons_norm, targets_norm)
     mean_ssim = all_ssim.mean()
 
     return mean_ssim.item(), all_ssim

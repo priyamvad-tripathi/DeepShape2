@@ -3,7 +3,6 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from skimage.metrics import structural_similarity as ssim
-from torchmetrics.image import StructuralSimilarityIndexMeasure
 
 __all__ = [
     "psnr_batch",
@@ -11,7 +10,6 @@ __all__ = [
     "blendedness",
     "contamination",
     "psnr_torch",
-    "ssim_torch",
 ]
 
 
@@ -31,7 +29,7 @@ def psnr_batch(true_images, recon_images):
     # Compute max value per image
     max_vals = np.max(true_images, axis=(-2, -1))
 
-    psnr = 10 * np.log10((max_vals**2) / (mse + 1e-10))
+    psnr = 10 * np.log10((max_vals**2) / mse)
     return psnr
 
 
@@ -79,40 +77,6 @@ def psnr_torch(true_images: torch.Tensor, recon_images: torch.Tensor):
 
     psnr = 10 * torch.log10((max_vals**2) / (mse))
     return psnr
-
-
-def ssim_torch(targets, recons):
-    """
-    Fast GPU SSIM computation for a batch of grayscale images.
-
-    Args:
-        targets: Tensor of shape (N, 1, H, W)
-        recons: Tensor of shape (N, 1, H, W)
-
-    Returns:
-        mean_ssim: float
-        all_ssim: np.array of shape (N,)
-    """
-    targets = targets.float()
-    recons = recons.float()
-    device = targets.device
-
-    # Compute per-image min/max
-    min_t = targets.view(targets.shape[0], -1).min(dim=1)[0].view(-1, 1, 1, 1)
-    max_t = targets.view(targets.shape[0], -1).max(dim=1)[0].view(-1, 1, 1, 1)
-
-    # Normalize images per their own range
-    targets_norm = (targets - min_t) / (max_t - min_t)
-    min_r = recons.view(recons.shape[0], -1).min(dim=1)[0].view(-1, 1, 1, 1)
-    max_r = recons.view(recons.shape[0], -1).max(dim=1)[0].view(-1, 1, 1, 1)
-    recons_norm = (recons - min_r) / (max_r - min_r)
-
-    # Compute SSIM with reduction='none' for per-image SSIM
-    ssim_metric = StructuralSimilarityIndexMeasure(reduction="none").to(device)
-    all_ssim = ssim_metric(recons_norm, targets_norm)
-    mean_ssim = all_ssim.mean()
-
-    return mean_ssim.item(), all_ssim
 
 
 # %% Quality Metrics for Blended Images

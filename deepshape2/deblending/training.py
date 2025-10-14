@@ -13,7 +13,7 @@ from deepshape2.utils import (
     load_ckp,
     psnr_torch,
     save_ckp,
-    ssim_torch,
+    ssim_batch,
     time_string,
 )
 from deepshape2.visualization import plot
@@ -267,8 +267,7 @@ def predict(
 
     # Accumulate results as tensors on GPU
     targets_all, inputs_all, outputs_all = [], [], []
-    psnr_out_all, ssim_out_all = [], []
-    psnr_in_all, ssim_in_all = [], []
+    psnr_out_all, psnr_in_all = [], []
 
     with torch.inference_mode(), torch.amp.autocast("cuda"):
         pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
@@ -294,19 +293,11 @@ def predict(
                 inp_sc = torch.sinh(inp_gpu) / scale_fac
 
                 # Compute metrics on GPU
-                psnr_out, ssim_out = (
-                    psnr_torch(target_sc, out_sc),
-                    ssim_torch(target_sc, out_sc)[1],
-                )
-                psnr_in, ssim_in = (
-                    psnr_torch(target_sc, inp_sc),
-                    ssim_torch(target_sc, inp_sc)[1],
-                )
+                psnr_batch_out = psnr_torch(target_sc, out_sc)
+                psnr_batch_in = psnr_torch(target_sc, inp_sc)
 
-                psnr_out_all.append(psnr_out)
-                ssim_out_all.append(ssim_out)
-                psnr_in_all.append(psnr_in)
-                ssim_in_all.append(ssim_in)
+                psnr_out_all.append(psnr_batch_out)
+                psnr_in_all.append(psnr_batch_in)
 
     # Concatenate batches and move to CPU only once
     targets_all = torch.cat(targets_all).cpu().numpy().squeeze()
@@ -314,9 +305,14 @@ def predict(
     inputs_all = torch.cat(inputs_all).cpu().numpy().squeeze()
 
     psnr_out = torch.cat(psnr_out_all).cpu().numpy()
-    ssim_out = torch.cat(ssim_out_all).cpu().numpy()
     psnr_in = torch.cat(psnr_in_all).cpu().numpy()
-    ssim_in = torch.cat(ssim_in_all).cpu().numpy()
+
+    ssim_out = ssim_batch(
+        np.sinh(targets_all) / scale_fac, np.sinh(outputs_all) / scale_fac
+    )
+    ssim_in = ssim_batch(
+        np.sinh(targets_all) / scale_fac, np.sinh(inputs_all) / scale_fac
+    )
 
     if print_stats:
         print(

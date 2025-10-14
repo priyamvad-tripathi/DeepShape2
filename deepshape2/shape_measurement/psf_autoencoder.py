@@ -116,7 +116,7 @@ def train(
         print("No saved checkpoints found. Starting from scratch.")
 
     # AMP scaler
-    scaler = torch.cuda.amp.GradScaler()
+    scaler = torch.amp.GradScaler("cuda")
 
     # --- Training loop ---
     for epoch in range(epochs):
@@ -125,6 +125,7 @@ def train(
 
         model.train()
         total_loss = []
+        running_loss = 0.0
 
         if scheduler is not None:
             current_lr = optimizer.param_groups[0]["lr"]
@@ -135,11 +136,11 @@ def train(
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
         with pbar:
-            for x in train_loader:
+            for nb, x in enumerate(train_loader, 1):
                 x = x.to(device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                with torch.cuda.amp.autocast():
+                with torch.amp.autocast("cuda"):
                     x_hat = model(x)
                     loss = criterion(x, x_hat)
 
@@ -147,9 +148,14 @@ def train(
                 scaler.step(optimizer)
                 scaler.update()
 
-                total_loss.append(loss.detach())
+                loss_detach = loss.detach()
+                total_loss.append(loss_detach)
 
-                postfix = {"Train Loss": f"{np.mean(total_loss):.{precision}e}"}
+                running_loss += loss_detach
+                mean_loss = (running_loss / nb).item()
+
+                postfix = {"Train Loss": f"{mean_loss:.3e}"}
+
                 if current_lr is not None:
                     postfix["LR"] = (
                         f"{Color.RED}{current_lr:.2e}{Color.OFF}"
@@ -190,9 +196,9 @@ def train(
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Val Loss": (
-                        f"{Color.RED}{-val_loss:.3f} dB{Color.OFF}"
+                        f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
                         if is_best
-                        else f"{-val_loss:.3f} dB"
+                        else f"{val_loss:.{precision}e}"
                     ),
                 }
                 pbar.set_postfix(pfix)

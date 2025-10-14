@@ -14,8 +14,10 @@ from deepshape2.utils import (
     get_tqdm,
     load_ckp,
     load_config,
+    psnr_torch,
     save_ckp,
     set_seed,
+    ssim_torch,
     time_string,
 )
 from deepshape2.visualization import plot, plot_losses
@@ -35,7 +37,7 @@ DATA_DIR = cfg["DATA_DIR"]
 loc_weights = cfg["MODEL_DIR"] + "autoencoder.pt"
 
 train_loader, val_loader = dataloader(
-    path=DATA_DIR + "psf_set.h5",
+    path=DATA_DIR + "PSF_set.h5",
     x_key=["psf"],
     y_key=None,
     split=[0.8, 0.2],
@@ -250,26 +252,60 @@ def train(
     return best_weights, train_loss_list, val_loss_list
 
 
-# Plotting function
-def compare_output(model, val_loader, n=8, weights=None):
+# Prediction function
+def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
     if weights is not None:
         model.load_state_dict(weights)
     model.eval()
 
-    x = next(iter(val_loader))[:n]
+    inputs, outputs = [], []
+    psnr_all, ssim_all = [], []
 
-    with torch.no_grad():
-        xhat = model(x.to(device))
+    with torch.inference_mode():
+        pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
 
-    inp = x.detach().cpu().numpy().squeeze()
-    out = xhat.detach().cpu().numpy().squeeze()
+        with pbar:
+            for x in val_loader:
+                pbar.update(1)
 
-    plot(
-        [inp, out, out - inp],
-        titles=["Inp", "Recon", "Diff"],
-        same_scale=[0, 1],
-        cbar=True,
+                x = x.to(device)
+                xhat = model(x)
+
+                inputs.append(x.cpu().numpy().squeeze())
+                outputs.append(xhat.cpu().numpy().squeeze())
+
+                psnr_batch = psnr_torch(x, xhat).cpu().numpy()
+                _, ssim_batch = ssim_torch(x, xhat)
+
+                psnr_all.extend(psnr_batch)
+                ssim_all.extend(ssim_batch)
+
+    inputs = np.concatenate(inputs)
+    outputs = np.concatenate(outputs)
+
+    psnr_out = torch.cat(psnr_all).numpy()
+    ssim_out = torch.cat(ssim_all).numpy()
+
+    print(
+        f"SSIM: Max {np.max(ssim_out):.03f} | Min {np.min(ssim_out):.03f} | Mean {np.mean(ssim_out):.03f}"
     )
+    print(
+        f"PSNR: Max {np.max(psnr_out):.03f} dB | Min {np.min(psnr_out):.03f} dB | Mean {np.mean(psnr_out):.03f} dB"
+    )
+
+    # Optional: Visualization
+    if n > 0:
+        tit_out = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[:n], psnr_out[:n])]
+        blank_titles = [None] * n
+
+        plot(
+            images=[inputs[:n], outputs[:n], inputs[:n] - outputs[:n]],
+            caption=["Input", "Recon", "Residual"],
+            cbar=True,
+            scale_row=1,
+            same_scale=[0, 1],
+            subtitles=[blank_titles, tit_out, blank_titles],
+        )
 
 
 # %% Train the model and plot results
@@ -314,7 +350,7 @@ plot_losses(
 plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)
 
 
-compare_output(model, best_weights, val_loader, n=8)
+predict(model, best_weights, val_loader)
 
 # %% Save Model
 

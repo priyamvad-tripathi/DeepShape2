@@ -6,8 +6,16 @@ import numpy as np
 import torch
 from colorist import Color
 
-from deepshape2.deblending import psnr_torch, ssim_torch, vae_loss, validation_loss
-from deepshape2.utils import get_progress_bar, get_tqdm, load_ckp, save_ckp, time_string
+from deepshape2.deblending import vae_loss, validation_loss
+from deepshape2.utils import (
+    get_progress_bar,
+    get_tqdm,
+    load_ckp,
+    psnr_torch,
+    save_ckp,
+    ssim_torch,
+    time_string,
+)
 from deepshape2.visualization import plot
 
 tqdm_kwargs = get_tqdm()

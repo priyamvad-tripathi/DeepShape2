@@ -29,6 +29,8 @@ device = get_freest_gpu(set_device=True)
 set_seed(2024)
 
 model = Autoender().to(device)
+
+model = torch.compile(model)
 # %% Load Config and Data
 cfg = load_config()
 
@@ -113,6 +115,9 @@ def train(
     except (AttributeError, FileNotFoundError, TypeError):
         print("No saved checkpoints found. Starting from scratch.")
 
+    # AMP scaler
+    scaler = torch.cuda.amp.GradScaler()
+
     # --- Training loop ---
     for epoch in range(epochs):
         if epoch < current_epoch:
@@ -131,15 +136,18 @@ def train(
 
         with pbar:
             for x in train_loader:
-                x = x.to(device)
-                xhat = model(x)
+                x = x.to(device, non_blocking=True)
 
-                loss = criterion(x, xhat)
-                total_loss.append(loss.item())
+                optimizer.zero_grad(set_to_none=True)
+                with torch.cuda.amp.autocast():
+                    x_hat = model(x)
+                    loss = criterion(x, x_hat)
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+
+                total_loss.append(loss.detach())
 
                 postfix = {"Train Loss": f"{np.mean(total_loss):.{precision}e}"}
                 if current_lr is not None:
@@ -151,7 +159,7 @@ def train(
                 pbar.update(1)
                 pbar.set_postfix(postfix)
 
-            epoch_loss = np.mean(total_loss)
+            epoch_loss = torch.stack(total_loss).mean().item()
             train_loss_list.append(epoch_loss)
 
             # Print updates if tqdm is disabled
@@ -176,7 +184,8 @@ def train(
                 if is_best and epoch >= 5:
                     best_epoch = epoch
                     best_val_loss = val_loss
-                    best_weights = copy.deepcopy(model.state_dict())
+                    # store CPU copy of weights
+                    best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
@@ -193,7 +202,7 @@ def train(
                     line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
 
             else:
-                best_weights = copy.deepcopy(model.state_dict())
+                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
             if not tqdm_enabled:
                 print(line)
@@ -268,7 +277,7 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
             for x in val_loader:
                 pbar.update(1)
 
-                x = x.to(device)
+                x = x.to(device, non_blocking=True)
                 xhat = model(x)
 
                 inputs.append(x.cpu().numpy().squeeze())

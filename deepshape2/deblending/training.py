@@ -34,7 +34,6 @@ def train(
     device,
     **kwargs,
 ):
-    # Initialize tracking variables
     start_time = time.time()
     best_val_loss = np.inf
     best_weights = None
@@ -49,15 +48,15 @@ def train(
         [np.inf],
     )
 
-    # Configuration from kwargs
+    # --- Config ---
     filename = kwargs.get("filename")
     scheduler_params = kwargs.get("scheduler_params", None)
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
     tqdm_enabled = kwargs.get("tqdm_enabled", True)
+    tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
 
-    # Optional scheduler
     scheduler = None
     if scheduler_params:
         scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -66,9 +65,9 @@ def train(
 
     print(f"Running on device: {device}")
 
+    # --- Load checkpoint ---
     try:
         model, optimizer, checkpoint = load_ckp(filename, model, optimizer, device)
-
         current_epoch = checkpoint["epoch"]
         best_val_loss = checkpoint.get("best_val_loss", np.inf)
         best_weights = checkpoint.get("best_weights")
@@ -77,17 +76,18 @@ def train(
         kl_loss_list = checkpoint.get("kl_loss_list", [])
         train_loss_list = checkpoint.get("train_loss_list", [])
         lr_list = checkpoint.get("lr_list", [])
-
-        if scheduler_params and "scheduler_state_dict" in checkpoint:
+        if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         print(f"Loaded checkpoint from epoch {current_epoch}")
-
     except (AttributeError, FileNotFoundError, TypeError):
         print("No saved checkpoints found. Starting from scratch.")
 
-    scale_fac = train_loader.dataset.scale_fac
+    scale_fac = getattr(train_loader.dataset, "scale_fac", 1.0)
 
-    # Training loop
+    # --- Mixed precision scaler ---
+    scaler = torch.amp.GradScaler("cuda")
+
+    # --- Training loop ---
     for epoch in range(epochs):
         if epoch < current_epoch:
             continue
@@ -105,29 +105,31 @@ def train(
 
         with pbar:
             for inp, target in train_loader:
-                inp, target = inp.to(device), target.to(device)
+                inp, target = (
+                    inp.to(device, non_blocking=True),
+                    target.to(device, non_blocking=True),
+                )
 
-                out = model(inp)
-                # if epoch < 10:
-                #     loss, recon, kl = vae_loss(target, *out, beta=0)
-                # else:
-                loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
+                optimizer.zero_grad(set_to_none=True)
+                with torch.amp.autocast("cuda"):
+                    out = model(inp)
+                    loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
 
-                total_loss.append(loss.item())
-                recon_losses.append(recon.item())
-                kl_losses.append(kl.item())
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                # detach losses to avoid CPU sync during accumulation
+                total_loss.append(loss.detach())
+                recon_losses.append(recon.detach())
+                kl_losses.append(kl.detach())
 
                 # Progress bar updates
                 postfix = {
-                    "Train Loss": f"{np.mean(total_loss):.{precision}e}",
-                    "Recon Loss": f"{np.mean(recon_losses):.{precision}e}",
-                    "KL Loss": f"{np.mean(kl_losses):.{precision}e}",
+                    "Train Loss": f"{(torch.stack(total_loss).mean()):.{precision}e}",
+                    "Recon Loss": f"{(torch.stack(recon_losses).mean()):.{precision}e}",
+                    "KL Loss": f"{(torch.stack(kl_losses).mean()):.{precision}e}",
                 }
-
                 if current_lr is not None:
                     postfix["LR"] = (
                         f"{Color.RED}{current_lr:.2e}{Color.OFF}"
@@ -138,56 +140,45 @@ def train(
                 pbar.update(1)
                 pbar.set_postfix(postfix)
 
-            # Logging epoch results
-            epoch_loss = np.mean(total_loss)
-            epoch_recon = np.mean(recon_losses)
-            epoch_kl = np.mean(kl_losses)
+            # Epoch metrics
+            epoch_loss = torch.stack(total_loss).mean().item()
+            epoch_recon = torch.stack(recon_losses).mean().item()
+            epoch_kl = torch.stack(kl_losses).mean().item()
 
             train_loss_list.append(epoch_loss)
             recon_loss_list.append(epoch_recon)
             kl_loss_list.append(epoch_kl)
 
-            # Print updates if tqdm is disabled
+            # Print updates if tqdm disabled
             if not tqdm_enabled:
                 line0 = f"Epoch {epoch + 1}/{epochs}"
                 if current_lr is not None:
-                    line0 += f" | LR: {current_lr:.2e}"
-                    if new_lr:
-                        line0 += " NEW"
+                    line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
                 print(line0)
-                line = (
-                    f"Train Loss: {epoch_loss:.{precision}e} | "
-                    f"Recon: {epoch_recon:.{precision}e} | "
-                    f"KL: {epoch_kl:.{precision}e}"
-                )
+                line = f"Train Loss: {epoch_loss:.{precision}e} | Recon: {epoch_recon:.{precision}e} | KL: {epoch_kl:.{precision}e}"
 
-            # Validation
+            # --- Validation ---
             if val_loader:
                 val_loss = validation_loss(
                     model, val_loader, device=device, scale_fac=scale_fac
                 )
                 val_loss_list.append(val_loss)
-
                 if scheduler:
                     scheduler.step(val_loss)
 
-                # Update best model
                 is_best = val_loss < best_val_loss
-                if is_best and epoch >= 5:  # int(0.02 * epochs):
+                if is_best and epoch >= 5:
                     best_epoch = epoch
                     best_val_loss = val_loss
-                    best_weights = copy.deepcopy(model.state_dict())
+                    best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
-                # Prepare metrics for display
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Recon Loss": f"{epoch_recon:.{precision}e}",
                     "KL Loss": f"{epoch_kl:.{precision}e}",
-                    "Val Loss": (
-                        f"{Color.RED}{-val_loss:.3f} dB{Color.OFF}"
-                        if is_best
-                        else f"{-val_loss:.3f} dB"
-                    ),
+                    "Val Loss": f"{Color.RED}{-val_loss:.3f} dB{Color.OFF}"
+                    if is_best
+                    else f"{-val_loss:.3f} dB",
                 }
                 pbar.set_postfix(pfix)
 
@@ -195,7 +186,7 @@ def train(
                     marker = "BEST" if is_best else ""
                     line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
             else:
-                best_weights = copy.deepcopy(model.state_dict())
+                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
             if not tqdm_enabled:
                 print(line)
@@ -274,56 +265,58 @@ def predict(
         model.load_state_dict(weights)
     model.eval()
 
-    # Accumulate results
-    targets, inputs, outputs = [], [], []
-
+    # Accumulate results as tensors on GPU
+    targets_all, inputs_all, outputs_all = [], [], []
     psnr_out_all, ssim_out_all = [], []
     psnr_in_all, ssim_in_all = [], []
 
-    with torch.inference_mode():
+    with torch.inference_mode(), torch.amp.autocast("cuda"):
         pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:
             for inp, target in val_loader:
                 pbar.update(1)
 
-                # Save original (before to(device))
-                targets.append(target.numpy().squeeze())
-                inputs.append(inp.numpy().squeeze())
+                inp_gpu = inp.to(device, non_blocking=True)
+                target_gpu = target.to(device, non_blocking=True)
 
-                inp = inp.to(device)
-                out = model(inp)
+                out = model(inp_gpu)
                 out = out[0]
 
-                outputs.append(out.cpu().numpy().squeeze())
+                # Append GPU tensors
+                targets_all.append(target_gpu)
+                inputs_all.append(inp_gpu)
+                outputs_all.append(out)
 
-                target_sc = torch.sinh(target) / scale_fac
+                # Scale images
+                target_sc = torch.sinh(target_gpu) / scale_fac
                 out_sc = torch.sinh(out) / scale_fac
-                inp_sc = torch.sinh(inp) / scale_fac
+                inp_sc = torch.sinh(inp_gpu) / scale_fac
 
-                psnr_out = psnr_torch(target_sc, out_sc)
-                _, ssim_out = ssim_torch(target_sc, out_sc)
+                # Compute metrics on GPU
+                psnr_out, ssim_out = (
+                    psnr_torch(target_sc, out_sc),
+                    ssim_torch(target_sc, out_sc)[1],
+                )
+                psnr_in, ssim_in = (
+                    psnr_torch(target_sc, inp_sc),
+                    ssim_torch(target_sc, inp_sc)[1],
+                )
 
-                psnr_in = psnr_torch(target_sc, inp_sc)
-                _, ssim_in = ssim_torch(target_sc, inp_sc)
+                psnr_out_all.append(psnr_out)
+                ssim_out_all.append(ssim_out)
+                psnr_in_all.append(psnr_in)
+                ssim_in_all.append(ssim_in)
 
-                psnr_out_all.append(psnr_out.cpu())
-                ssim_out_all.append(ssim_out.cpu())
+    # Concatenate batches and move to CPU only once
+    targets_all = torch.cat(targets_all).cpu().numpy().squeeze()
+    outputs_all = torch.cat(outputs_all).cpu().numpy().squeeze()
+    inputs_all = torch.cat(inputs_all).cpu().numpy().squeeze()
 
-                psnr_in_all.append(psnr_in.cpu())
-                ssim_in_all.append(ssim_in.cpu())
-
-    # Concatenate batch-wise results
-    targets = np.concatenate(targets)
-    outputs = np.concatenate(outputs)
-    inputs = np.concatenate(inputs)
-
-    # Compute image quality metrics
-    psnr_out = torch.cat(psnr_out_all).numpy()
-    ssim_out = torch.cat(ssim_out_all).numpy()
-
-    psnr_in = torch.cat(psnr_in_all).numpy()
-    ssim_in = torch.cat(ssim_in_all).numpy()
+    psnr_out = torch.cat(psnr_out_all).cpu().numpy()
+    ssim_out = torch.cat(ssim_out_all).cpu().numpy()
+    psnr_in = torch.cat(psnr_in_all).cpu().numpy()
+    ssim_in = torch.cat(ssim_in_all).cpu().numpy()
 
     if print_stats:
         print(
@@ -339,9 +332,9 @@ def predict(
         "ssim_out": ssim_out,
         "psnr_in": psnr_in,
         "ssim_in": ssim_in,
-        "targets": targets,
-        "output": outputs,
-        "input": inputs,
+        "targets": targets_all,
+        "output": outputs_all,
+        "input": inputs_all,
     }
 
     # Optional: Visualization
@@ -351,7 +344,12 @@ def predict(
         tit_in = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_in[:n], psnr_in[:n])]
 
         plot(
-            images=[targets[:n], inputs[:n], outputs[:n], targets[:n] - outputs[:n]],
+            images=[
+                targets_all[:n],
+                inputs_all[:n],
+                outputs_all[:n],
+                targets_all[:n] - outputs_all[:n],
+            ],
             caption=["Target", "Input", "Recon", "Residual"],
             cbar=True,
             scale_row=0,

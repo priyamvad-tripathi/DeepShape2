@@ -67,7 +67,9 @@ val_loader = DataLoader(
 )
 
 # Load the VAE model
-model = VAE().to(device)
+model = VAE()
+model = model.to(device)
+model = torch.compile(model)
 
 # %% Train the model and plot results
 n_epochs = 151

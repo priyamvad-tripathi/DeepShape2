@@ -9,7 +9,6 @@ from deepshape2.models import VAE
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_losses
 
-scale_fac = 1e7
 # %% Set default parameters
 cfg = load_config()
 
@@ -17,7 +16,9 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + f"vae_deblender_{scale_fac:.0e}.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_deblender.pt"
+
+scale_fac = cfg["scale_fac"]
 
 # Torch Parameters
 device = get_freest_gpu(set_device=True)
@@ -25,10 +26,10 @@ set_seed()
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(30)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:25], group_names[25:]
+group_names_train, group_names_val = group_names[:45], group_names[45:]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(

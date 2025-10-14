@@ -111,9 +111,8 @@ def train(
                 )
 
                 optimizer.zero_grad(set_to_none=True)
-                with torch.amp.autocast("cuda"):
-                    out = model(inp)
-                    loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
+                out = model(inp)
+                loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
 
                 scaler.scale(loss).backward()
                 scaler.step(optimizer)
@@ -269,7 +268,7 @@ def predict(
     targets_all, inputs_all, outputs_all = [], [], []
     psnr_out_all, psnr_in_all = [], []
 
-    with torch.inference_mode(), torch.amp.autocast("cuda"):
+    with torch.inference_mode():
         pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:

@@ -8,12 +8,12 @@ import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, get_worker_info
 
-from deepshape2.utils import set_seed
+from deepshape2.utils import load_config, set_seed
 
 # Seeds to ensure reproducibility
 set_seed()
-
-
+cfg = load_config()
+scale_fac = cfg["scale_fac"]
 # %% Deblending Loader
 
 
@@ -47,7 +47,7 @@ class BlendDataset(Dataset):
         x_key: str,
         y_key: str,
         groups=None,
-        scale_fac: float = 1e7,
+        scale_fac: float = scale_fac,
         min_max: bool = False,
         tanh: bool = False,
         arcsin: bool = True,

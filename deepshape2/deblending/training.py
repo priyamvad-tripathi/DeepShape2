@@ -11,6 +11,7 @@ from deepshape2.utils import (
     get_progress_bar,
     get_tqdm,
     load_ckp,
+    load_config,
     psnr_torch,
     save_ckp,
     ssim_batch,
@@ -22,6 +23,8 @@ tqdm_kwargs = get_tqdm()
 
 
 __all__ = ["train", "predict", "plot_bad_cases"]
+
+scale_fac = load_config().get("scale_fac", 5e7)
 
 
 # %% Training Function
@@ -250,7 +253,7 @@ def predict(
     weights,
     val_loader,
     device,
-    scale_fac,
+    scale_fac=scale_fac,
     print_stats=True,
     n=5,
     tqdm_enabled=True,
@@ -353,7 +356,7 @@ def predict(
 # %% Plotting Function
 def plot_bad_cases(
     metrics,
-    scale_fac,
+    scale_fac=scale_fac,
     names=["PSNR", "SSIM"],
     category="input",
     n=5,

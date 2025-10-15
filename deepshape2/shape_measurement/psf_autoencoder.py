@@ -25,8 +25,8 @@ from deepshape2.visualization import plot, plot_losses
 tqdm_kwargs = get_tqdm()
 
 # %% Load Device and Model
-device = get_freest_gpu(set_device=True)
-set_seed(2024)
+device = get_freest_gpu()
+set_seed()
 
 model = Autoender(attention=False).to(device)
 
@@ -36,7 +36,7 @@ cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
 
-loc_weights = cfg["MODEL_DIR"] + "autoencoder_no_attention.pt"
+loc_weights = cfg["MODEL_DIR"] + "autoencoder.pt"
 
 train_loader, val_loader = dataloader(
     path=DATA_DIR + "PSF_set.h5",
@@ -294,7 +294,7 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
     inputs = np.concatenate(inputs)
     outputs = np.concatenate(outputs)
 
-    psnr_out = torch.cat(psnr_all).numpy()
+    psnr_out = np.concatenate(psnr_all)
     ssim_out = ssim_batch(inputs, outputs)
 
     print(
@@ -317,6 +317,8 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
             same_scale=[0, 1],
             subtitles=[blank_titles, tit_out, blank_titles],
         )
+
+    return psnr_out
 
 
 # %% Train the model and plot results
@@ -345,9 +347,6 @@ best_weights, train_loss_list, val_loss_list = train(
 # %% Test
 checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)
 best_weights = checkpoint["best_weights"]
-beta = checkpoint["beta"]
-recon_loss = checkpoint["recon_loss_list"]
-kl_loss = checkpoint["kl_loss_list"]
 val_loss = checkpoint["val_loss_list"]
 train_loss = checkpoint["train_loss_list"]
 
@@ -361,7 +360,7 @@ plot_losses(
 plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)
 
 
-predict(model, best_weights, val_loader)
+predict(model, val_loader, weights=best_weights)
 
 # %% Save Model
 

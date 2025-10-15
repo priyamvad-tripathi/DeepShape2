@@ -16,7 +16,7 @@ __all__ = ["get_freest_gpu", "save_ckp", "load_ckp", "set_seed"]
 
 
 # %%
-def get_freest_gpu(set_device=False):
+def get_freest_gpu(set_device=True):
     """Return the index of the GPU with the most free memory."""
     try:
         output = subprocess.check_output(

@@ -42,7 +42,6 @@ test_loader = DataLoader(
 # Load the VAE model
 model = VAE()
 model = model.to(device)
-model = model.compile()
 
 # %% Load Model Weights
 checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)

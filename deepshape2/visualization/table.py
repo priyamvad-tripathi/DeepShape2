@@ -2,13 +2,14 @@ import matplotlib
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import rc_context
+from matplotlib.colors import LogNorm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from .base import MEDIUM_SIZE, SMALL_SIZE, savefig, set_style
 
 set_style()
 
-__all__ = ["plot"]
+__all__ = ["plot", "plot_log_image"]
 
 
 def normalize_images_shape(images, subtitles=None):
@@ -146,3 +147,40 @@ def plot(images, **kwargs):
             savefig(fname, remove_bg=remove_bg)
         else:
             plt.show()
+
+
+# %%
+def plot_log_image(im, figsize=(8, 8), cmap="inferno", fname=None, remove_bg=False):
+    im = np.clip(im, 0, None)
+
+    fig, ax = plt.subplots(figsize=figsize, dpi=150)
+
+    # Display the image in log scale but preserve actual flux scaling
+    im_disp = ax.imshow(
+        im + 1e-9,
+        norm=LogNorm(vmin=max(im.min(), 1e-9), vmax=im.max()),
+        cmap=cmap,
+        origin="lower",
+    )
+
+    # Remove all axes
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.axis("off")
+
+    # --- Custom colorbar on the right ---
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.05)
+
+    fmt = matplotlib.ticker.ScalarFormatter(useMathText=True)
+    fmt.set_powerlimits((-3, 2))
+
+    colbar = fig.colorbar(im_disp, cax=cax, orientation="vertical", format=fmt)
+    colbar.set_label("Flux [Jy]", fontsize=MEDIUM_SIZE, labelpad=10)
+    colbar.ax.tick_params(labelsize=SMALL_SIZE)
+    colbar.ax.yaxis.get_offset_text().set(size=SMALL_SIZE)
+
+    if fname:
+        savefig(fname, remove_bg=remove_bg)
+    else:
+        plt.show()

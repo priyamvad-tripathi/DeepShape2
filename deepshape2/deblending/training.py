@@ -84,9 +84,6 @@ def train(
 
     scale_fac = getattr(train_loader.dataset, "scale_fac", 1.0)
 
-    # --- Mixed precision scaler ---
-    scaler = torch.amp.GradScaler("cuda")
-
     # --- Training loop ---
     for epoch in range(epochs):
         if epoch < current_epoch:
@@ -114,14 +111,12 @@ def train(
                 out = model(inp)
                 loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
 
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
+                loss.backward()
+                optimizer.step()
 
-                # detach losses to avoid CPU sync during accumulation
-                total_loss.append(loss.detach())
-                recon_losses.append(recon.detach())
-                kl_losses.append(kl.detach())
+                total_loss.append(loss.detach().cpu())
+                recon_losses.append(recon.detach().cpu())
+                kl_losses.append(kl.detach().cpu())
 
                 # Progress bar updates
                 postfix = {
@@ -166,7 +161,7 @@ def train(
                     scheduler.step(val_loss)
 
                 is_best = val_loss < best_val_loss
-                if is_best and epoch >= 5:
+                if is_best:
                     best_epoch = epoch
                     best_val_loss = val_loss
                     best_weights = {k: v.cpu() for k, v in model.state_dict().items()}

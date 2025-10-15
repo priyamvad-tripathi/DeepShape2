@@ -289,7 +289,7 @@ def predict(model, val_loader, n=5, weights=None, tqdm_enabled=True):
 
                 psnr_batch = psnr_torch(x, xhat).cpu().numpy()
 
-                psnr_all.extend(psnr_batch)
+                psnr_all.append(psnr_batch)
 
     inputs = np.concatenate(inputs)
     outputs = np.concatenate(outputs)

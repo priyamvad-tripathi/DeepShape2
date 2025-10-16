@@ -1,4 +1,21 @@
-# %%
+"""
+Module: deepshape2.simulation.visibilities
+
+Utility functions to create and manipulate simulated radio interferometric
+visibilities using ska-sdp functionality.
+
+This file provides:
+- create_visibility_set: build an empty visibility dataset for a telescope config
+- predict_visibilities_from_image: predict visibilities from an image array
+- create_visibilities_from_image: convenience wrapper to go from an image array
+    to a visibility dataset (handles phasecentre and visibility positions)
+- add_noise_to_visibility: add Gaussian noise to visibilities and compute SNR
+- make_dirty_image_and_psf: form dirty image and optional PSF from visibilities
+- rephase_visibility: change phasecentre (apply phasor and optionally rotate uvw)
+- simulate_visibilities: high-level helper to simulate visibilities from an image
+"""
+# %% Import Libraries
+
 import numpy as np
 from astropy import units as u
 from astropy.coordinates import SkyCoord
@@ -7,7 +24,7 @@ from ska_sdp_datamodels.configuration import create_named_configuration
 from ska_sdp_datamodels.gridded_visibility import create_griddata_from_image
 from ska_sdp_datamodels.image import Image
 from ska_sdp_datamodels.science_data_model.polarisation_model import PolarisationFrame
-from ska_sdp_datamodels.visibility import create_visibility
+from ska_sdp_datamodels.visibility import create_visibility, export_visibility_to_ms
 from ska_sdp_func_python.grid_data import (
     grid_visibility_weight_to_griddata,
     griddata_visibility_reweight,
@@ -25,7 +42,16 @@ from ska_sdp_func_python.visibility import (
 
 from deepshape2.utils import load_config
 
-# %% Load configuration
+__all__ = [
+    "create_visibility_template",
+    "make_dirty_image_and_psf",
+    "add_noise_to_visibility",
+    "predict_visibilities_from_array",
+    "rephase_visibility",
+    "simulate_visibilities",
+]
+
+# %% Load default configuration
 cfg = load_config()
 
 FREQUENCY = cfg["frequency"]
@@ -35,49 +61,62 @@ HA_INTERVAL = cfg["ha_interval"]
 CELLSIZE = cfg["SCALE_RADIANS"]
 
 
-# %%
+# %% Core helpers
 
 
-def generate_visibilities(phasecentre, **kwargs):
+def create_visibility_template(phasecentre, tel="MID", rmax=None, **kwargs):
     """
-    Generate a visibility structure for observations taken from a given telescope using RASCIL functions.
+    Create an empty visibility dataset for a telescope configuration.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
+    phasecentre : SkyCoord
+            Phase centre of the observation.
+    tel : str
+            Named telescope configuration (default "MID").
+    rmax : float or None
+            Maximum baseline length in meters.
+    frequency : ndarray or None
+            Frequency array in Hz. Defaults to FREQUENCY.
+    channel_bandwidth : ndarray or None
+            Channel bandwidths in Hz. Defaults to BANDWIDTH.
+    ha_interval : tuple or None
+            Hour-angle interval in hours. Defaults to HA_INTERVAL.
+    integration_time : float or None
+            Integration time in seconds. Defaults to INTEGRATION_TIME.
 
-    phasecentre (SkyCoord): The phase centre of the observation. Must be an instance of SkyCoord.
-    tel (str, optional): The name of the telescope configuration. Default is "MID".
-    rmax (float, optional): The maximum baseline length in meters. Default is None.
-    frequencies (numpy.ndarray, optional): Array of frequency values in Hz. Default is an array with a single value of 1.4 GHz.
-    channel_bandwidths (numpy.ndarray or float, optional): Array of channel bandwidth values in Hz. Default is 0.3 times the frequencies.
-    ha_interval (tuple, optional): Hour angle interval in hours. Default is (-4, 4).
-    integration_time (int, optional): Integration time in seconds. Default is 300.
-
-    Returns:
-    -----------
-    Visibility (xarray.Dataset): The generated visibility structure.
+    Returns
+    -------
+    xarray.Dataset
+            Visibility dataset ready for prediction.
     """
+    if not isinstance(phasecentre, SkyCoord):
+        raise TypeError(
+            "phasecentre should be an astropy.coordinates.SkyCoord instance"
+        )
 
-    tel = kwargs.get("tel", "MID")
-    rmax = kwargs.get("rmax", None)
-    frequencies = kwargs.get("frequencies", np.array([FREQUENCY]))
-    channel_bandwidths = kwargs.get("channel_bandwidths", np.array([BANDWIDTH]))
+    frequency = kwargs.get("frequency", FREQUENCY)
+    channel_bandwidth = kwargs.get("channel_bandwidth", BANDWIDTH)
     ha_interval = kwargs.get("ha_interval", HA_INTERVAL)
     integration_time = kwargs.get("integration_time", INTEGRATION_TIME)
 
-    if not isinstance(phasecentre, SkyCoord):
-        print("phasecentre should be a SkyCoord instance")
-        return
+    if isinstance(frequency, (float, int)):
+        frequency = np.array([frequency])
+    if isinstance(channel_bandwidth, (float, int)):
+        channel_bandwidth = np.array([channel_bandwidth])
+
     config = create_named_configuration(tel, rmax=rmax)
 
-    # Now compute number of integration times and corresponding HAs
+    # Number of integration samples across the hour angle range
     dtime_hr = integration_time / 3600.0
     ntimes = int((ha_interval[1] - ha_interval[0]) / dtime_hr)
 
-    # Centered w.r.t. transit, in radian
+    # Times centered with respect to transit (convert hours to radians)
     times = (
         np.linspace(
-            ha_interval[0] + dtime_hr / 2.0, ha_interval[1] - dtime_hr / 2.0, ntimes
+            ha_interval[0] + dtime_hr / 2.0,
+            ha_interval[1] - dtime_hr / 2.0,
+            ntimes,
         )
         * np.pi
         / 12.0
@@ -86,8 +125,8 @@ def generate_visibilities(phasecentre, **kwargs):
     vt = create_visibility(
         config,
         times,
-        frequencies,
-        channel_bandwidth=channel_bandwidths,
+        frequency,
+        channel_bandwidth=channel_bandwidth,
         weight=1.0,
         phasecentre=phasecentre,
         polarisation_frame=PolarisationFrame("stokesI"),
@@ -97,40 +136,103 @@ def generate_visibilities(phasecentre, **kwargs):
     return vt
 
 
-def dirty_psf_from_visibilities(
-    vt,
-    **kwargs,
-):
+def _image_to_rascil(image_array, phasecentre, **kwargs):
     """
-    This function uses visibility data to create a dirty image and its corresponding PSF.
+    Helper: convert a 2D image array to a RASCIL Image with WCS and polarisation.
+    Expects 'cellsize', 'frequency', and 'channel_bandwidth' in kwargs.
+    """
+    cellsize = kwargs.get("cellsize", CELLSIZE)
+    frequency = kwargs.get("frequency", FREQUENCY)
+    channel_bandwidth = kwargs.get("channel_bandwidth", BANDWIDTH)
 
-    Parameters:
-    -----------
-    vt : Visibility
-        Visibility data.
+    if not isinstance(frequency, float):
+        frequency = float(frequency[0])
+
+    ny, nx = image_array.shape
+    image = image_array.reshape([1, 1, ny, nx])
+    np.nan_to_num(image, copy=False)
+
+    cellsize_deg = cellsize * 180.0 / np.pi
+
+    w = WCS(naxis=4)
+    w.wcs.crval = [phasecentre.ra.deg, phasecentre.dec.deg, 0, frequency]
+    w.wcs.ctype = ["RA---SIN", "DEC--SIN", "STOKES", "FREQ"]
+    w.wcs.cdelt = [-cellsize_deg, +cellsize_deg, 1, channel_bandwidth]
+    w.wcs.radesys = "ICRS"
+    w.wcs.equinox = 2000.0
+    w.wcs.crpix = [ny // 2 + 1, nx // 2 + 1, 1, 1]
+
+    polarisation_frame = PolarisationFrame("stokesI")
+    return Image.constructor(
+        image, wcs=w, polarisation_frame=polarisation_frame, clean_beam=None
+    )
+
+
+def predict_visibilities_from_array(image_array, ra_deg, dec_deg, **kwargs):
+    """
+    Predict visibilities from a 2D image array.
+
+    Parameters
+    ----------
+    image_array : ndarray
+        2D sky image (ny, nx).
+    ra_deg, dec_deg : float
+        Phase centre coordinates in degrees.
+    kwargs : dict
+        Additional parameters passed to create_visibility_set or predict_ng.
+
+    Returns
+    -------
+    xarray.Dataset
+        Predicted visibilities.
+    """
+
+    verbosity = kwargs.get("verbosity", 0)
+
+    phasecentre = SkyCoord(
+        ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame="icrs", equinox="J2000"
+    )
+
+    # Predict visibilities onto provided visibility template
+    im = _image_to_rascil(image_array, phasecentre, **kwargs)
+
+    visibility_template = create_visibility_template(phasecentre, **kwargs)
+
+    vt = predict_ng(visibility_template, im, verbosity=verbosity)
+    return vt
+
+
+def make_dirty_image_and_psf(vis, **kwargs):
+    """
+    Create a dirty image and optionally a PSF from visibilities.
+
+    Parameters
+    ----------
+    vis : xarray.Dataset
+            Visibility dataset.
+    NPIX : int
+            Number of pixels along each axis.
     cellsize : float
-        Pixel size in radians.
+            Pixel size in radians.
+    weighting : str
+            'natural', 'uniform', or 'robust'.
+    robustness : float
+            Robustness parameter used for weighting.
+    override_cellsize : bool
+            Pass through to create_image_from_visibility.
+    verbosity : int
+            Verbosity level.
+    do_wstacking : bool
+            Use W-stacking in the imaging.
+    do_psf : bool
+            Also compute the PSF.
+    asarray : bool
+            Return numpy arrays instead of Image objects.
 
-    **kwargs : dict, optional
-        Additional keyword arguments:
-        - NPIX (int): Number of pixels along each axis of the output images (default is 128).
-        - weighting (str): Weighting scheme to use ('natural', 'uniform', 'robust', default is 'robust').
-        - robustness (float): Robustness parameter for robust weighting (default is 0).
-        - asarray (bool): If True, return the dirty image and PSF as numpy arrays (default is True).
-        - use_wagg (bool): If True, use WAGG gridder (GPU based gridder), otherwise use Nifty-Gridder (CPU based Gridder) (default is False).
-        - override_cellsize (bool): If True, override the cellsize parameter (default is False).
-
-    Returns:
-    -----------
-    tuple
-        - dirty (Image): Dirty image.
-        - psf (Image): Point spread function.
-
-        If asarray is True:
-
-            - dirty_array (numpy.ndarray): Dirty image as a numpy array.
-            - psf_array (numpy.ndarray): PSF as a numpy array.
-
+    Returns
+    -------
+    dirty, psf : ndarray or Image
+            Dirty image (and PSF if requested).
     """
 
     NPIX = kwargs.get("NPIX", 128)
@@ -140,91 +242,85 @@ def dirty_psf_from_visibilities(
     override_cellsize = kwargs.get("override_cellsize", False)
     verbosity = kwargs.get("verbosity", 0)
     do_wstacking = kwargs.get("do_wstacking", True)
-    do_PSF = kwargs.get("do_PSF", True)
-    return_asarray = kwargs.get("asarray", True)
+    do_psf = kwargs.get("do_psf", True)
+    asarray = kwargs.get("asarray", True)
 
-    #! Give same weight to every visibility?
-    # vt.weight.data[np.nonzero(vt.weight.data)] = 1
-
-    # First create empty rascil Image instance from visibilities
     model = create_image_from_visibility(
-        vt, cellsize=cellsize, npixel=NPIX, override_cellsize=override_cellsize
+        vis, cellsize=cellsize, npixel=NPIX, override_cellsize=override_cellsize
     )
 
-    # Reweight visibilities if not natural weighting
+    # Compute grid weights and reweight visibilities
     grid_weights = create_griddata_from_image(
         model, polarisation_frame=model.image_acc.polarisation_frame
     )
-    grid_weights = grid_visibility_weight_to_griddata(vt, grid_weights)
-    vt = griddata_visibility_reweight(
-        vt,
+    grid_weights = grid_visibility_weight_to_griddata(vis, grid_weights)
+    vis_reweighted = griddata_visibility_reweight(
+        vis,
         grid_weights[0],
         weighting=weighting,
         robustness=robustness,
         sumwt=grid_weights[1],
     )
 
-    dirty, _ = invert_ng(vt, model, verbosity=verbosity, do_wstacking=do_wstacking)
-
-    if do_PSF:
-        psf, _ = invert_ng(
-            vt, model, dopsf=True, verbosity=verbosity, do_wstacking=do_wstacking
-        )
-
-        if return_asarray:
-            return (
-                dirty.pixels.to_numpy().astype(np.float32).squeeze(),
-                psf.pixels.to_numpy().astype(np.float32).squeeze(),
-            )
-
-        return (
-            dirty,
-            psf,
-            dirty.pixels.to_numpy().astype(np.float32).squeeze(),
-            psf.pixels.to_numpy().astype(np.float32).squeeze(),
-        )
-
-    if return_asarray:
-        return dirty.pixels.to_numpy().astype(np.float32).squeeze()
-
-    return (
-        dirty,
-        dirty.pixels.to_numpy().astype(np.float32).squeeze(),
+    # Invert to obtain dirty image
+    dirty_img, _ = invert_ng(
+        vis_reweighted, model, verbosity=verbosity, do_wstacking=do_wstacking
     )
 
+    psf_img = None
+    if do_psf:
+        psf_img, _ = invert_ng(
+            vis_reweighted,
+            model,
+            dopsf=True,
+            verbosity=verbosity,
+            do_wstacking=do_wstacking,
+        )
 
-def addNoiseToVis(vis, return_SNR=False, **kwargs):
+    def _to_array(img):
+        return img.pixels.to_numpy().astype(np.float32).squeeze()
+
+    if asarray:
+        if do_psf:
+            return _to_array(dirty_img), _to_array(psf_img)
+        return _to_array(dirty_img)
+
+    if do_psf:
+        return dirty_img, psf_img, _to_array(dirty_img), _to_array(psf_img)
+    return dirty_img, _to_array(dirty_img)
+
+
+def add_noise_to_visibility(vis, **kwargs):
     """
-    Add noise to visibility data.
+    Add Gaussian noise to visibility data.
 
-    Parameters:
-    -----------
+    Parameters
+    ----------
     vis : xarray.Dataset
-        The visibility dataset containing the visibility data and metadata.
-    return_SNR : bool, optional
-        If True, return the Signal-to-Noise Ratio (SNR) in the visibility domain
+            Visibility dataset to which noise will be added.
+    return_snr : bool
+            If True, return computed SNR along with noisy visibilities.
+    verbosity : int
+            If >0, print RMS and SNR information.
+    noise_fac : float or None
+            Scale factor applied to the computed thermal noise.
+    sigma : float or None
+            If provided, set noise level explicitly in microJy.
 
-    **kwargs : dict, optional
-        - verbosity : int
-            If >1, print a summary of the RMS noise and SNR.
-        - noise_fac : float
-            A factor to scale the noise.
-        - sigma : float
-            A specific noise standard deviation to use (in microJy).
-
-    Returns:
-    -----------
-    nvis : xarray.Dataset
-        The visibility dataset with added noise.
-    SNR : float
-        The Signal-to-Noise Ratio of the visibility data (only if return_SNR is True).
-
-    Notes:
-    -----------
-    - The paramters eta and sens are based of the SKA-MID dishes. This need to be updated for other telescopes.
-
+    Returns
+    -------
+    noisy_vis : xarray.Dataset
+            Copy of vis with noise added to vis.vis.
+    snr : float (optional)
+            Signal-to-noise ratio (returned only if return_snr is True).
     """
 
+    return_snr = kwargs.get("return_snr", False)
+    verbosity = kwargs.get("verbosity", 0)
+    noise_fac = kwargs.get("noise_fac", None)
+    sigma = kwargs.get("sigma", None)
+
+    # Physical constants / telescope assumptions (SKA-MID based defaults)
     eta = 0.98  # Aperture efficiency
     k_b = 1.38064852e-23  # Boltzmann constant
     bandwidth = (vis.channel_bandwidth.data,)
@@ -232,172 +328,74 @@ def addNoiseToVis(vis, return_SNR=False, **kwargs):
     sens = 10.1  # A_eff/T_sys
     bt = np.outer(int_time, bandwidth)
     sigma_arr = (np.sqrt(2) * k_b) / (sens * eta * (np.sqrt(bt)))
-    verbosity = kwargs.get("verbosity", 0)
+    sigma_val = sigma_arr[0, 0] * 1e26  # convert to Jy
 
-    sigma = sigma_arr[0, 0] * 1e26
+    if noise_fac is not None:
+        sigma_val = noise_fac * sigma_val
 
-    if "noise_fac" in kwargs:
-        sigma = kwargs["noise_fac"] * sigma
+    if sigma is not None:
+        # User-provided sigma assumed in microJy
+        sigma_val = sigma * 1e-6
 
-    if "sigma" in kwargs:
-        sigma = kwargs["sigma"] * 1e-6
-
-    if sigma != 0:
-        SNR = np.linalg.norm(vis.vis.data) / sigma
+    # Compute SNR in visibility domain
+    if sigma_val != 0:
+        SNR = np.linalg.norm(vis.vis.data) / sigma_val
     else:
         SNR = np.inf
 
-    # Add noise to real and imaginary parts
-    noise_real = np.random.normal(loc=0, scale=sigma, size=vis.vis.shape)
-    noise_imag = np.random.normal(loc=0, scale=sigma, size=vis.vis.shape)
-
     if verbosity > 0:
-        print(f"RMS Noise= {sigma * 1e6:0.2f} uJy")
+        print(f"RMS Noise= {sigma_val * 1e6:0.2f} uJy")
         print(f"SNR_vis= {SNR:0.2f}")
 
+    # Generate complex Gaussian noise (real and imaginary parts)
+    noise_real = np.random.normal(loc=0.0, scale=sigma_val, size=vis.vis.shape)
+    noise_imag = np.random.normal(loc=0.0, scale=sigma_val, size=vis.vis.shape)
     noise = np.vectorize(complex)(noise_real, noise_imag)
-    vis_with_noise = vis.vis + noise
 
-    nvis = vis.copy(deep=True)
-    nvis["vis"].data = vis_with_noise
+    noisy_vis = vis.copy(deep=True)
+    noisy_vis["vis"].data = vis.vis.data.copy() + noise
 
-    return nvis, SNR
+    if return_snr:
+        return noisy_vis, SNR
+    return noisy_vis
 
 
-def visibilities_from_array(image, vt0, phasecentre, **kwargs):
+def rephase_visibility(vis, new_phasecentre: SkyCoord, rotate_uv=True, remove_w=True):
     """
-    Convert an image to visibilities using the specified parameters.
+    Change the phase centre of a visibility dataset by applying a phasor and
+    optionally rotating the uvw coordinates.
 
-    Parameters:
-    -----------
-    image : numpy.ndarray
-        The input image array.
-    vt0 : xarray.Dataset
-        The initial visibility positions.
-    phasecentre : SkyCoord
-        The phase center of the image. (Pointing centre)
+    Parameters
+    ----------
+    vis : xarray.Dataset
+            Input visibility dataset.
+    new_phasecentre : SkyCoord
+            Desired new phase centre.
+    rotate_uv : bool
+            If True, rotate uvw to remain coplanar with the new tangent plane.
+    remove_w : bool
+            If True, set the w component to zero after rotation.
 
-    **kwargs : dict
-        Additional keyword arguments:
-        - frequencies : float or list of floats, optional
-            The frequency or list of frequencies in Hz. Default is 1.4 GHz.
-        - channel_bandwidths : float, optional
-            The channel bandwidth in Hz. Default is 0.3 * frequency.
-
-    Returns:
-    --------
-    Visibility : xarray.Dataset
-        The visibility object after conversion.
+    Returns
+    -------
+    xarray.Dataset
+            New visibility dataset with updated vis and uvw (and phasecentre attr).
     """
+    dl, dm, _ = skycoord_to_lmn(new_phasecentre, vis.phasecentre)
+    dn = np.sqrt(1.0 - dl**2 - dm**2)
 
-    frequency = kwargs.get("frequency", FREQUENCY)
-    cellsize = kwargs.get("cellsize", CELLSIZE)
-    if not isinstance(frequency, float):
-        frequency = frequency[0]
-    channel_bandwidth = kwargs.get("channel_bandwidths", BANDWIDTH)
-    verbosity = kwargs.get("verbosity", 0)
-
-    # cellsize = kwargs.get("cellsize", imager.def_cellsize)
-
-    cellsize_deg = cellsize * 180 / np.pi
-
-    ny, nx = image.shape
-    image = image.reshape([1, 1, ny, nx])
-    np.nan_to_num(image, copy=False)
-
-    w = WCS(naxis=4)
-    w.wcs.crval = np.array([phasecentre.ra.deg, phasecentre.dec.deg, 0, frequency])
-    w.wcs.ctype = ["RA---SIN", "DEC--SIN", "STOKES", "FREQ"]
-    w.wcs.cdelt = np.array([-cellsize_deg, +cellsize_deg, 1, channel_bandwidth])
-
-    w.wcs.radesys = "ICRS"
-    w.wcs.equinox = 2000.00
-
-    w.wcs.crpix = np.array([ny // 2 + 1, nx // 2 + 1, 1, 1])
-
-    polarisation_frame = PolarisationFrame("stokesI")
-
-    im = Image.constructor(
-        image, wcs=w, polarisation_frame=polarisation_frame, clean_beam=None
-    )
-
-    vt = predict_ng(vt0, im, vserbosity=verbosity)
-
-    return vt
-
-
-def generate_visibilities_from_array(gal_arr, ra, dec, cellsize, **kwargs):
-    """
-    Generate visibilities from a given galaxy image.
-
-    Parameters:
-    -----------
-    gal_arr (numpy.ndarray): Galaxy image expressed as 2D numpy array of size NPIX x NPIX.
-    ra (float): Right ascension of the phase centre in degrees.
-    dec (float): Declination of the phase centre in degrees.
-    cellsize (float): The size of each cell in the image in degrees.
-
-
-    **kwargs: Additional keyword arguments to be passed to the visibility generation functions.
-
-    Returns:
-    -----------
-    vt (xarray.Dataset): The generated visibilities.
-    """
-
-    # Create Position for image center
-    phasecentre = SkyCoord(
-        ra=ra * u.deg,
-        dec=dec * u.deg,
-        frame="icrs",
-        equinox="J2000",
-    )
-
-    # Generate raw visibility positions
-    vt0 = generate_visibilities(phasecentre=phasecentre, **kwargs)
-
-    # Calculate true visibilities
-    vt = visibilities_from_array(
-        image=gal_arr,
-        vt0=vt0,
-        phasecentre=phasecentre,
-        cellsize=cellsize,
-        **kwargs,
-    )
-
-    return vt
-
-
-def recenter_visibility(vis, newphasecentre: SkyCoord, rotate_uv=True, remove_w=False):
-    """Phase rotate from the current phase centre to a new phase centre.
-
-    If tangent is False the uvw are recomputed and the
-    visibility phasecentre is updated. Otherwise, only the
-    visibility phases are adjusted.
-
-    :param vis: Visibility to be rotated
-    :param newphasecentre: SkyCoord of new phasecentre
-    :param tangent: Stay on the same tangent plane? (True)
-    :param inverse: Actually do the opposite
-    :return: Visibility
-    """
-    dl, dm, _ = skycoord_to_lmn(newphasecentre, vis.phasecentre)
-    dn = np.sqrt(1 - dl**2 - dm**2)
-
-    # No significant change?
     if np.abs(dn) < 1e-15:
-        print("No significant change in phasecentre")
+        # No meaningful change
         return vis
 
-    # Make a new copy
     newvis = vis.copy(deep=True)
 
-    # Apply phase term to the visibilities
-    phasor = calculate_visibility_phasor(newphasecentre, newvis)
-    assert vis["vis"].data.shape == phasor.shape
+    # Apply phase rotation phasor (multiply by conjugate to shift phasecentre)
+    phasor = calculate_visibility_phasor(new_phasecentre, newvis)
+    if newvis["vis"].data.shape != phasor.shape:
+        raise ValueError("Visibility and phasor shapes do not match")
     newvis["vis"].data *= np.conj(phasor)
 
-    # Rotate uvw such that they are coplanar
     if rotate_uv:
         uvw_old = newvis["uvw"].data.copy()
         u_new = uvw_old[..., 0] - dl * uvw_old[..., 2] / dn
@@ -409,8 +407,52 @@ def recenter_visibility(vis, newphasecentre: SkyCoord, rotate_uv=True, remove_w=
             uvw_new[..., 2] = uvw_old[..., 2]
         newvis["uvw"].data = uvw_new.copy()
 
-        # Change attributes
-        newvis.attrs["phasecentre"] = newphasecentre
+        # Update phasecentre attribute and recompute lambda units
+        newvis.attrs["phasecentre"] = new_phasecentre
         newvis = calculate_visibility_uvw_lambda(newvis)
 
     return newvis
+
+
+# %% High-level simulation helper
+
+
+def simulate_visibilities(
+    field, ra_pointing, dec_pointing, filename=None, create_dirty=False, **kwargs
+):
+    """
+    High-level helper to simulate visibilities from a 2D image.
+
+    Parameters
+    ----------
+    field : ndarray
+            2D image array (ny, nx).
+    ra_pointing, dec_pointing : float
+            Pointing centre in degrees.
+    filename : str or None
+            If provided, export the noisy visibilities to a Measurement Set.
+    kwargs : forwarded to lower-level functions (e.g. integration_time, frequencies)
+
+    Returns
+    -------
+    xarray.Dataset or (xarray.Dataset, ndarray)
+            Noisy (or clean) visibility dataset, optionally with dirty image.
+    """
+    # Generate visibilities from image
+    vt = predict_visibilities_from_array(field, ra_pointing, dec_pointing, **kwargs)
+
+    # Add noise default: use computed thermal noise
+    vt_n = add_noise_to_visibility(vt, **kwargs)
+
+    # Optionally save to Measurement Set
+    if filename is not None:
+        export_visibility_to_ms(filename, [vt_n])
+
+    # Optionally create dirty image
+    if create_dirty:
+        dirty_arr = make_dirty_image_and_psf(
+            vt_n, NPIX=field.shape[0], do_psf=False, **kwargs
+        )
+        return vt_n, dirty_arr
+
+    return vt_n

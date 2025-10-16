@@ -188,6 +188,7 @@ def predict_visibilities_from_array(image_array, ra_deg, dec_deg, **kwargs):
     """
 
     verbosity = kwargs.get("verbosity", 0)
+    threads = kwargs.get("threads", 20)
 
     phasecentre = SkyCoord(
         ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame="icrs", equinox="J2000"
@@ -198,7 +199,7 @@ def predict_visibilities_from_array(image_array, ra_deg, dec_deg, **kwargs):
 
     visibility_template = create_visibility_template(phasecentre, **kwargs)
 
-    vt = predict_ng(visibility_template, im, verbosity=verbosity)
+    vt = predict_ng(visibility_template, im, verbosity=verbosity, threads=threads)
     return vt
 
 
@@ -244,6 +245,7 @@ def make_dirty_image_and_psf(vis, **kwargs):
     do_wstacking = kwargs.get("do_wstacking", True)
     do_psf = kwargs.get("do_psf", True)
     asarray = kwargs.get("asarray", True)
+    threads = kwargs.get("threads", 20)
 
     model = create_image_from_visibility(
         vis, cellsize=cellsize, npixel=NPIX, override_cellsize=override_cellsize
@@ -264,7 +266,11 @@ def make_dirty_image_and_psf(vis, **kwargs):
 
     # Invert to obtain dirty image
     dirty_img, _ = invert_ng(
-        vis_reweighted, model, verbosity=verbosity, do_wstacking=do_wstacking
+        vis_reweighted,
+        model,
+        verbosity=verbosity,
+        do_wstacking=do_wstacking,
+        threads=threads,
     )
 
     psf_img = None
@@ -275,6 +281,7 @@ def make_dirty_image_and_psf(vis, **kwargs):
             dopsf=True,
             verbosity=verbosity,
             do_wstacking=do_wstacking,
+            threads=threads,
         )
 
     def _to_array(img):

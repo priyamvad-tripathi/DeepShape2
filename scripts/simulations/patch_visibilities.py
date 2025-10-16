@@ -33,6 +33,7 @@ for dataset_type, patch in patches.items():
             dec_pointing=patch_dec,
             filename=vis_filename,
             create_dirty=True,
+            threads=60,
         )
 
         post_step(f"Simulating visibilities for {patch} ({dataset_type})", start)

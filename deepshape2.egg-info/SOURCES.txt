@@ -1,6 +1,0 @@
-README.md
-pyproject.toml
-deepshape2.egg-info/PKG-INFO
-deepshape2.egg-info/SOURCES.txt
-deepshape2.egg-info/dependency_links.txt
-deepshape2.egg-info/top_level.txt

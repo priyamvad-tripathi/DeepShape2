@@ -1,22 +1,6 @@
-"""
-Module: deepshape2.simulation.visibilities
-
-Utility functions to create and manipulate simulated radio interferometric
-visibilities using ska-sdp functionality.
-
-This file provides:
-- create_visibility_set: build an empty visibility dataset for a telescope config
-- predict_visibilities_from_image: predict visibilities from an image array
-- create_visibilities_from_image: convenience wrapper to go from an image array
-    to a visibility dataset (handles phasecentre and visibility positions)
-- add_noise_to_visibility: add Gaussian noise to visibilities and compute SNR
-- make_dirty_image_and_psf: form dirty image and optional PSF from visibilities
-- rephase_visibility: change phasecentre (apply phasor and optionally rotate uvw)
-- simulate_visibilities: high-level helper to simulate visibilities from an image
-"""
-# %% Import Libraries
-
+# %% Imports
 import numpy as np
+import xarray
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
@@ -203,7 +187,7 @@ def predict_visibilities_from_array(image_array, ra_deg, dec_deg, **kwargs):
     return vt
 
 
-def make_dirty_image_and_psf(vis, **kwargs):
+def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     """
     Create a dirty image and optionally a PSF from visibilities.
 
@@ -297,7 +281,7 @@ def make_dirty_image_and_psf(vis, **kwargs):
     return dirty_img, _to_array(dirty_img)
 
 
-def add_noise_to_visibility(vis, **kwargs):
+def add_noise_to_visibility(vis: xarray.Dataset, **kwargs):
     """
     Add Gaussian noise to visibility data.
 
@@ -367,7 +351,7 @@ def add_noise_to_visibility(vis, **kwargs):
     return noisy_vis
 
 
-def rephase_visibility(vis, new_phasecentre: SkyCoord, rotate_uv=True, remove_w=True):
+def rephase_visibility(vis: xarray.Dataset, new_phasecentre, remove_w=True):
     """
     Change the phase centre of a visibility dataset by applying a phasor and
     optionally rotating the uvw coordinates.
@@ -376,10 +360,8 @@ def rephase_visibility(vis, new_phasecentre: SkyCoord, rotate_uv=True, remove_w=
     ----------
     vis : xarray.Dataset
             Input visibility dataset.
-    new_phasecentre : SkyCoord
+    new_phasecentre
             Desired new phase centre.
-    rotate_uv : bool
-            If True, rotate uvw to remain coplanar with the new tangent plane.
     remove_w : bool
             If True, set the w component to zero after rotation.
 
@@ -388,7 +370,15 @@ def rephase_visibility(vis, new_phasecentre: SkyCoord, rotate_uv=True, remove_w=
     xarray.Dataset
             New visibility dataset with updated vis and uvw (and phasecentre attr).
     """
-    dl, dm, _ = skycoord_to_lmn(new_phasecentre, vis.phasecentre)
+
+    new_phasecentre_skycoord = SkyCoord(
+        ra=new_phasecentre[0] * u.deg,
+        dec=new_phasecentre[1] * u.deg,
+        frame="icrs",
+        equinox="J2000",
+    )
+
+    dl, dm, _ = skycoord_to_lmn(new_phasecentre_skycoord, vis.phasecentre)
     dn = np.sqrt(1.0 - dl**2 - dm**2)
 
     if np.abs(dn) < 1e-15:
@@ -398,25 +388,24 @@ def rephase_visibility(vis, new_phasecentre: SkyCoord, rotate_uv=True, remove_w=
     newvis = vis.copy(deep=True)
 
     # Apply phase rotation phasor (multiply by conjugate to shift phasecentre)
-    phasor = calculate_visibility_phasor(new_phasecentre, newvis)
+    phasor = calculate_visibility_phasor(new_phasecentre_skycoord, newvis)
     if newvis["vis"].data.shape != phasor.shape:
         raise ValueError("Visibility and phasor shapes do not match")
     newvis["vis"].data *= np.conj(phasor)
 
-    if rotate_uv:
-        uvw_old = newvis["uvw"].data.copy()
-        u_new = uvw_old[..., 0] - dl * uvw_old[..., 2] / dn
-        v_new = uvw_old[..., 1] - dm * uvw_old[..., 2] / dn
-        uvw_new = np.zeros_like(uvw_old)
-        uvw_new[..., 0] = u_new
-        uvw_new[..., 1] = v_new
-        if not remove_w:
-            uvw_new[..., 2] = uvw_old[..., 2]
-        newvis["uvw"].data = uvw_new.copy()
+    uvw_old = newvis["uvw"].data.copy()
+    u_new = uvw_old[..., 0] - dl * uvw_old[..., 2] / dn
+    v_new = uvw_old[..., 1] - dm * uvw_old[..., 2] / dn
+    uvw_new = np.zeros_like(uvw_old)
+    uvw_new[..., 0] = u_new
+    uvw_new[..., 1] = v_new
+    if not remove_w:  # ? Apply additional w-term correction using wstacking
+        uvw_new[..., 2] = uvw_old[..., 2]
+    newvis["uvw"].data = uvw_new.copy()
 
-        # Update phasecentre attribute and recompute lambda units
-        newvis.attrs["phasecentre"] = new_phasecentre
-        newvis = calculate_visibility_uvw_lambda(newvis)
+    # Update phasecentre attribute and recompute lambda units
+    newvis.attrs["phasecentre"] = new_phasecentre_skycoord
+    newvis = calculate_visibility_uvw_lambda(newvis)
 
     return newvis
 

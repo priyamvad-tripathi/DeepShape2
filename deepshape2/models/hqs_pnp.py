@@ -8,9 +8,12 @@ import torch.nn.functional as F
 from deepinv.models import DRUNet
 from torch.fft import fft2, ifft2, ifftshift
 
+from deepshape2.utils import load_config
+
+cfg = load_config()
+
+
 # %% Load Model
-
-
 class HQS_PnP(nn.Module):
     def __init__(
         self,
@@ -19,15 +22,12 @@ class HQS_PnP(nn.Module):
         f2,
         falpha,
         denoiser,
-        # padding=True,
         SIGMA=0.71e-06,
     ):
         super().__init__()
-        # self.steps = nn.ModuleList([iteration for _ in range(niter)])
         self.denoiser = denoiser
         self.sigma_k = np.geomspace(f1 * SIGMA, f2 * SIGMA, niter)[::-1]
         self.alpha_k = falpha * (SIGMA**2) / (self.sigma_k**2)
-        # self.padding = padding
 
     def pad_batch(self, im_batch):
         _, _, N, N2 = im_batch.shape
@@ -81,48 +81,57 @@ class HQS_PnP(nn.Module):
 
 # %%
 
-try:
-    path0 = os.environ["PATH_DEN"]
-except KeyError:
-    path0 = "download"
+# Default hyperparameters
+DEF_niter = 30
+DEF_SIGMA = 0.71e-6
+DEF_f1 = 0.1414
+DEF_f2 = 1.9979
+DEF_falpha = 3.9949
+
+# Predefined locations to check for weights
+WEIGHT_PATHS = [
+    cfg["GENCI_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
+    cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
+]
 
 
-# %%
-# Best Hyperparameters found by PnP_tuning.py
-niter = 30
-SIGMA = 0.71e-06
-f1 = 0.1414
-f2 = 1.9979
-falpha = 3.9949
+def resolve_pretrained_path():
+    """
+    Returns the first existing weight file path from predefined locations.
+    If none exists, returns 'download' to automatically download weights.
+    """
+    for path in WEIGHT_PATHS:
+        if path and os.path.exists(path):
+            return path
+    return "download"
 
 
-def create_model(
-    device,
-    niter=niter,
-    f1=f1,
-    f2=f2,
-    falpha=falpha,
-    path=None,
-    SIGMA=SIGMA,
-):
-    denoiser = DRUNet(in_channels=1, out_channels=1, pretrained=path0, device=device)
+def create_model(device, path=None, **hqs_params):
+    """
+    Creates HQS_PnP model with DRUNet denoiser.
+
+    If `path` is provided, loads checkpoint weights from there.
+    Otherwise, uses pretrained weights from predefined locations or downloads them.
+    """
+    pretrained_path = resolve_pretrained_path()
+
+    denoiser = DRUNet(
+        in_channels=1, out_channels=1, pretrained=pretrained_path, device=device
+    )
 
     if path is not None:
         ckpt = torch.load(path, map_location=device, weights_only=False)
         denoiser.load_state_dict(ckpt["best_weights"])
 
+    niter = hqs_params.get("niter", DEF_niter)
+    f1 = hqs_params.get("f1", DEF_f1)
+    f2 = hqs_params.get("f2", DEF_f2)
+    falpha = hqs_params.get("falpha", DEF_falpha)
+    SIGMA = hqs_params.get("SIGMA", DEF_SIGMA)
+
     model = HQS_PnP(
-        niter=niter,
-        f1=f1,
-        f2=f2,
-        falpha=falpha,
-        denoiser=denoiser,
-        SIGMA=SIGMA,
+        niter=niter, f1=f1, f2=f2, falpha=falpha, denoiser=denoiser, SIGMA=SIGMA
     ).to(device)
 
     model.eval()
-
-    return model
-    return model
-    return model
     return model

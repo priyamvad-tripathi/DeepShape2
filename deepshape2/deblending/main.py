@@ -26,10 +26,10 @@ set_seed()
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(45)]
 
 
-group_names_train, group_names_val = group_names[:45], group_names[45:]
+group_names_train, group_names_val = group_names[:40], group_names[40:]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
@@ -70,7 +70,6 @@ val_loader = DataLoader(
 # Load the VAE model
 model = VAE()
 model = model.to(device)
-model = torch.compile(model)
 
 # %% Train the model and plot results
 n_epochs = 151

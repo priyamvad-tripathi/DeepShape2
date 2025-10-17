@@ -42,5 +42,5 @@ for dataset_type, patch in patches.items():
         dirty_wide[f"{dataset_type}_{patch}"] = dirty
 
 # %% Save all dirty images
-save(dirty_wide, DATA_DIR + "dirty_image_patches.h5")
+save(dirty_wide, DATA_DIR + "dirty_image_patches.pkl")
 post_step("Saving all dirty images", start)

@@ -19,14 +19,7 @@ from deepshape2.simulation import (
     predict_visibilities_from_array,
     rephase_visibility,
 )
-from deepshape2.utils import (
-    get_progress_bar,
-    get_tqdm,
-    load_config,
-    load_h5,
-    post_step,
-    save,
-)
+from deepshape2.utils import get_progress_bar, get_tqdm, load_config, load_h5, post_step
 
 # Disable warnings and logging from external libraries
 warnings.warn = lambda *args, **kwargs: None
@@ -48,8 +41,7 @@ def _process_facet(vis: xarray.Dataset, gal_center, NPIX_facet=256):
     return make_dirty_image_and_psf(vis_recentered, NPIX=NPIX_facet)
 
 
-def _process_facet_batch(vis, loc_batch, NPIX_facet):
-    """Processes a small batch of galaxy locations."""
+def process_batch(vis, loc_batch, NPIX_facet):
     dirty_batch, psf_batch = [], []
     for loc in loc_batch:
         dirty, psf = _process_facet(vis, loc, NPIX_facet)
@@ -64,34 +56,26 @@ def chunked_iterable(seq, size):
         yield seq[i : i + size]
 
 
-def get_facets(vis, galaxy_locations, NPIX_facet=256, chunk_size=20):
-    """
-    Parallel facet extraction using Dask Delayed (no client needed).
+def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=None):
+    dirty_all, psf_all = [], []
+    n = len(galaxy_locations)
+    start = time.time()
+    for i in range(0, n, batch_size):
+        loc_batch = galaxy_locations[i : i + batch_size]
 
-    Args:
-        vis: xarray.Dataset or preloaded visibility data.
-        galaxy_locations: array/list of coordinates [(RA, Dec), ...].
-        NPIX_facet: pixel size of each facet.
-        chunk_size: number of galaxies processed per Dask task.
+        delayed_tasks = [
+            delayed(_process_facet)(vis, loc, NPIX_facet) for loc in loc_batch
+        ]
+        results = compute(*delayed_tasks)
 
-    Returns:
-        (dirty_all, psf_all): np.ndarray aligned with galaxy_locations.
-    """
+        dirty, psf = zip(*results)
+        dirty_all.append(np.stack(dirty))
+        psf_all.append(np.stack(psf))
 
-    delayed_batches = []
+        post_step(f"processing batch {i // batch_size + 1}", start, client=client)
+        # client.restart()
 
-    for loc_batch in chunked_iterable(galaxy_locations, chunk_size):
-        delayed_result = delayed(_process_facet_batch)(vis, loc_batch, NPIX_facet)
-        delayed_batches.append(delayed_result)
-
-    # Compute in parallel
-    results = compute(*delayed_batches)
-
-    # Concatenate results in correct order
-    dirty_all = np.concatenate([r[0] for r in results], axis=0)
-    psf_all = np.concatenate([r[1] for r in results], axis=0)
-
-    return dirty_all, psf_all
+    return np.concatenate(dirty_all), np.concatenate(psf_all)
 
 
 def reconstruct_facets(
@@ -176,11 +160,8 @@ def residual_facet_image(
 # %%
 if __name__ == "__main__":
     start = time.time()
-    pkl = {}
-
     DATA_DIR = load_config()["DATA_DIR"]
 
-    # --- Define patches and corresponding HDF5 / MS paths
     PATCHES = {
         "wide": {
             "h5_file": DATA_DIR + "wide_set.h5",
@@ -194,9 +175,18 @@ if __name__ == "__main__":
         },
     }
 
+    # -----------------------------
+    # --- Create output HDF5
+    # -----------------------------
+    facets_h5_path = DATA_DIR + "facets.h5"
+    data = load_h5(facets_h5_path, "a", delete_if_exists=True)
+
+    # -----------------------------
+    # --- Dask cluster
+    # -----------------------------
     with (
         LocalCluster(
-            n_workers=60,
+            n_workers=64,
             processes=True,
             threads_per_worker=1,
             scheduler_port=8786,
@@ -204,56 +194,84 @@ if __name__ == "__main__":
         ) as cluster,
         Client(cluster) as client,
     ):
-        print(client.dashboard_link)
+        print("Dask dashboard:", client.dashboard_link)
 
-        # --- Iterate over patches
+        # -----------------------------
+        # --- Process each patch
+        # -----------------------------
         for patch_name, info in PATCHES.items():
-            pkl[patch_name] = {}
-            post_step(f"Start processing {patch_name} patch", start)
+            post_step(f"Start processing {patch_name} patch", start, data=data)
 
-            # --- Load HDF5 data
-            data = load_h5(info["h5_file"], mode="r")
+            patch_group = data.create_group(patch_name)
+
+            # --- Load HDF5 patch data
+            patch_data = load_h5(info["h5_file"], mode="r")
             patch_df = pd.DataFrame.from_records(
-                data[info["patch_key"]]["patch_df"][()]
+                patch_data[info["patch_key"]]["patch_df"][()]
             )
-            post_step(f"Loaded HDF5 for {patch_name}", start)
 
-            # --- Extract galaxy locations and flux info
-            galaxy_locations = patch_df[["RA_pix", "Dec_pix"]].to_numpy()[
-                :100
-            ]  # limit for testing
-            pkl[patch_name]["galaxy_locations"] = galaxy_locations.copy()
-
+            # --- Galaxy locations and flux
             mask = patch_df["flux_mask"].values
-            pkl[patch_name]["flux"] = patch_df["flux"][mask].values.copy()
-            pkl[patch_name]["isolated_stamps"] = data[info["patch_key"]][
-                "isolated_stamps"
-            ][()].copy()
-            pkl[patch_name]["blended_stamps"] = data[info["patch_key"]][
-                "blended_stamps"
-            ][()].copy()
+            patch_group.create_dataset(
+                "flux",
+                data=patch_df["flux"][mask].values,
+                compression="gzip",
+            )
+            galaxy_locations = patch_df[["RA_pix", "Dec_pix"]].to_numpy()[mask]
 
-            # --- Load visibility from MeasurementSet
+            # --- Stamp images
+            peak = np.max(
+                patch_data[info["patch_key"]]["isolated_stamps"][()], axis=(1, 2)
+            )
+
+            patch_group.create_dataset(
+                "peak",
+                data=peak,
+                compression="gzip",
+            )
+
+            del patch_df, mask, patch_data
+
+            # --- Load visibility
             vis = create_visibility_from_ms(info["ms_file"])[0]
-            post_step(f"Loaded visibility MS for {patch_name}", start, client=client)
+            post_step(
+                f"loading visibility MS for {patch_name}",
+                start,
+                data=data,
+                client=client,
+            )
 
-            # --- Extract facets of different sizes
+            # --- Extract facets at different sizes
             for NPIX_facet in [128, 256, 512]:
                 dirty_all, psf_all = get_facets(
                     vis=vis,
                     galaxy_locations=galaxy_locations,
                     NPIX_facet=NPIX_facet,
-                )
-                pkl[patch_name][f"{NPIX_facet}"] = {
-                    "dirty": dirty_all.copy(),
-                    "psf": psf_all.copy(),
-                }
-                post_step(
-                    f"Extracted {NPIX_facet}x{NPIX_facet} facets for {patch_name}",
-                    start,
                     client=client,
                 )
 
-        # --- Save results
-        save(pkl, DATA_DIR + "facets.pkl")
-        post_step("Saved all facet results", start)
+                facet_group = patch_group.create_group(f"facets_{NPIX_facet}")
+                facet_group.create_dataset(
+                    "dirty",
+                    data=dirty_all,
+                    compression="gzip",
+                    chunks=(1, NPIX_facet, NPIX_facet),
+                )
+                facet_group.create_dataset(
+                    "psf",
+                    data=psf_all,
+                    compression="gzip",
+                    chunks=(1, NPIX_facet, NPIX_facet),
+                )
+
+                post_step(
+                    f"extracting facet for {patch_name}, shape {dirty_all.shape}",
+                    start,
+                    data=data,
+                )
+
+    # -----------------------------
+    # --- Close HDF5
+    # -----------------------------
+    data.close()
+    post_step("Saved all facet results", start)

@@ -26,8 +26,8 @@ from deepshape2.visualization import plot
 # %% Constants / Configuration
 GRID_SIZE = 128
 SPLITS = [5, 10, 20, 30]
-USE_SPLIT = 0
-BATCH_SIZE = 64
+USE_SPLIT = 3
+BATCH_SIZE = 256
 SCALE_FAC = 5e7
 N_PLOT = 5
 N_TRIALS = 200
@@ -139,8 +139,14 @@ if __name__ == "__main__":
     cfg = load_config()
     DATA_DIR = cfg["DATA_DIR"]
     facet_data = load_h5(DATA_DIR + "facets.h5")
-    with load_h5(DATA_DIR + "wide_set.h5") as wide_set:
-        isolated_stamps = extract_image(wide_set["patch_051/blended_stamps"][:], 128)
+    isolated_stamps_path = DATA_DIR + "isolated_stamps_patch_051_ws_npix_128.pkl"
+    if os.path.exists(isolated_stamps_path):
+        isolated_stamps = load(isolated_stamps_path)
+    else:
+        with load_h5(DATA_DIR + "wide_set.h5") as wide_set:
+            isolated_stamps = extract_image(
+                wide_set["patch_051/blended_stamps"][:], 128
+            )
 
     # --- Torch setup
     device = get_freest_gpu(set_device=True)

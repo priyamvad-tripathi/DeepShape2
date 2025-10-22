@@ -128,7 +128,9 @@ def random_patch(location, catalogue_type="wide", patch_size=1.0):
 
     # x,y are offsets in degrees relative to RA0,Dec0
     offset_coords = SkyCoord(
-        lon=patch["x"].values * u.deg, lat=patch["y"].values * u.deg, frame=offset_frame
+        lon=-patch["x"].values * u.deg,
+        lat=patch["y"].values * u.deg,
+        frame=offset_frame,
     )
 
     # Convert back to ICRS RA,Dec for galaxies
@@ -137,7 +139,7 @@ def random_patch(location, catalogue_type="wide", patch_size=1.0):
     patch["Dec"] = icrs_coords.dec.deg
 
     # Convert patch centre to RA,Dec
-    centre_offset = SkyCoord(lon=cx * u.deg, lat=cy * u.deg, frame=offset_frame)
+    centre_offset = SkyCoord(lon=-cx * u.deg, lat=cy * u.deg, frame=offset_frame)
     centre_icrs = centre_offset.icrs
     centre_ra = centre_icrs.ra.deg
     centre_dec = centre_icrs.dec.deg
@@ -184,7 +186,7 @@ def compute_pixel_coordinates(patch, bottom_left):
     pix_x_deg = x0 + patch_out["pix_x"].values * SCALE_DEGREES
     pix_y_deg = y0 + patch_out["pix_y"].values * SCALE_DEGREES
     offset_coords = SkyCoord(
-        lon=pix_x_deg * u.deg,
+        lon=-pix_x_deg * u.deg,
         lat=pix_y_deg * u.deg,
         frame=offset_frame,  # Must be defined externally as the same origin
     )

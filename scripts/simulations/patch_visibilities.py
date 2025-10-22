@@ -8,7 +8,7 @@ from deepshape2.utils import load_config, load_h5, post_step, save
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 
-patches = {"wide_set": "patch_051", "deep_set": "patch_000"}
+patches = {"deep_set": "patch_000", "wide_set": "patch_051"}
 
 dirty_wide = {}
 start = time.time()
@@ -17,7 +17,7 @@ start = time.time()
 for dataset_type, patch in patches.items():
     # Construct HDF5 path and visibility filename
     h5_path = DATA_DIR + f"{dataset_type}.h5"
-    vis_filename = DATA_DIR + f"vis_{dataset_type}_{patch}.ms"
+    vis_filename = DATA_DIR + f"MS/vis_{dataset_type}_{patch}.ms"
 
     post_step(f"Loading {patch} from {dataset_type}", start)
 
@@ -42,5 +42,5 @@ for dataset_type, patch in patches.items():
         dirty_wide[f"{dataset_type}_{patch}"] = dirty
 
 # %% Save all dirty images
-save(dirty_wide, DATA_DIR + "dirty_image_patches.pkl")
+save(dirty_wide, DATA_DIR + "MS/dirty_image_patches.pkl")
 post_step("Saving all dirty images", start)

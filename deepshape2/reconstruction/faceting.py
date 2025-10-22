@@ -19,7 +19,14 @@ from deepshape2.simulation import (
     predict_visibilities_from_array,
     rephase_visibility,
 )
-from deepshape2.utils import get_progress_bar, get_tqdm, load_config, load_h5, post_step
+from deepshape2.utils import (
+    extract_image,
+    get_progress_bar,
+    get_tqdm,
+    load_config,
+    load_h5,
+    post_step,
+)
 
 # Disable warnings and logging from external libraries
 warnings.warn = lambda *args, **kwargs: None
@@ -38,7 +45,7 @@ def _process_facet(vis: xarray.Dataset, gal_center, NPIX_facet=256):
     recenter visibilities, invert to get dirty and PSF facets.
     """
     vis_recentered = rephase_visibility(vis, gal_center)
-    return make_dirty_image_and_psf(vis_recentered, NPIX=NPIX_facet)
+    return make_dirty_image_and_psf(vis_recentered, NPIX=NPIX_facet, do_wstacking=False)
 
 
 def process_batch(vis, loc_batch, NPIX_facet):
@@ -220,9 +227,10 @@ if __name__ == "__main__":
             galaxy_locations = patch_df[["RA_pix", "Dec_pix"]].to_numpy()[mask]
 
             # --- Stamp images
-            peak = np.max(
-                patch_data[info["patch_key"]]["isolated_stamps"][()], axis=(1, 2)
-            )
+            isolated_stamps = patch_data[info["patch_key"]]["isolated_stamps"][:]
+            isolated_stamps_crop = extract_image(isolated_stamps, NPIX=128)
+
+            peak = np.max(isolated_stamps, axis=(1, 2))
 
             patch_group.create_dataset(
                 "peak",
@@ -230,7 +238,20 @@ if __name__ == "__main__":
                 compression="gzip",
             )
 
-            del patch_df, mask, patch_data
+            # Save cropped isolated stamps for hyperparameter tuning
+            patch_group.create_dataset(
+                "isolated_stamps",
+                data=isolated_stamps_crop,
+                compression="gzip",
+            )
+
+            del patch_df, mask, patch_data, peak, isolated_stamps, isolated_stamps_crop
+            post_step(
+                f"processing isolated stamps for {patch_name}",
+                start,
+                data=data,
+                client=client,
+            )
 
             # --- Load visibility
             vis = create_visibility_from_ms(info["ms_file"])[0]

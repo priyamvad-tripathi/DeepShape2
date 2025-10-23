@@ -1,11 +1,9 @@
 # %% Load Modules
 import warnings
 
-import astropy.units as u
 import galsim
 import numpy as np
 import pandas as pd
-from astropy.coordinates import SkyCoord, SkyOffsetFrame
 from dask import compute, delayed
 
 from deepshape2.utils import load_config, process_stamp
@@ -18,6 +16,7 @@ __all__ = [
     "simulate_wide_field",
     "filter_patch_by_flux",
     "filter_patch_by_size",
+    "compute_pixel_coordinates",
 ]
 
 # %% Default Parameters
@@ -39,8 +38,6 @@ sersic_indexes = np.linspace(0.7, 2, 100)
 RA0 = cfg["RA0"]
 DEC0 = cfg["DEC0"]
 
-origin = SkyCoord(ra=RA0 * u.deg, dec=DEC0 * u.deg, frame="icrs")
-offset_frame = SkyOffsetFrame(origin=origin)
 
 # Size of wide field in degrees in flat sky approximation along one axis
 SKY_SIZE = 20
@@ -49,60 +46,86 @@ NPIX_SKY = cfg["NPIX_SKY"]
 NPIX_STAMP = 256
 
 TRECS_DIR = cfg["TRECS_DIR"]
+
+# %% Coordinate Conversion Function
+
+
+def _xy_to_radec(patch_center, center=[RA0, DEC0]):
+    """
+    Convert flat-sky offsets (x, y) in degrees to RA, Dec in degrees
+    using small-angle approximation around a reference center.
+
+    Parameters
+    ----------
+    patch_center : array-like
+        (x, y) in degrees; center of the patch.
+    center : tuple
+        (ra0, dec0) in degrees; reference patch center.
+
+    Returns
+    -------
+    radec : Shape [2,]
+    """
+
+    ra0, dec0 = center
+    dec0_rad = np.deg2rad(dec0)
+
+    x, y = patch_center
+
+    # Small-angle conversion
+    ra = ra0 - x / np.cos(dec0_rad)
+    dec = dec0 + y
+
+    # Normalize RA to [0,360)
+    ra = np.mod(ra, 360.0)
+
+    return np.array([ra, dec])
+
+
 # %% Catalogue Processing Functions
 
 
 def generate_patch_locations(
     sky_size=SKY_SIZE, patch_size=1.0, max_patches=100, seed=43
 ):
-    """Pre-select non-overlapping random patch locations."""
+    """Pre-select non-overlapping random patch locations (center coordinates)."""
     if seed is not None:
         np.random.seed(seed)
 
     x_min, x_max = -sky_size / 2, sky_size / 2
     y_min, y_max = -sky_size / 2, sky_size / 2
 
-    chosen_regions = []
-    locations = []
-
+    chosen_centers = []
     attempts = 0
-    while len(chosen_regions) < max_patches and attempts < max_patches * 10:
-        rand_x0 = np.random.uniform(x_min, x_max - patch_size)
-        rand_y0 = np.random.uniform(y_min, y_max - patch_size)
-        x1, y1 = rand_x0 + patch_size, rand_y0 + patch_size
+    while len(chosen_centers) < max_patches and attempts < max_patches * 10:
+        cx = np.random.uniform(x_min + patch_size / 2, x_max - patch_size / 2)
+        cy = np.random.uniform(y_min + patch_size / 2, y_max - patch_size / 2)
 
-        # Check overlap
+        # Check overlap: distance between centers < patch_size
         overlap = any(
-            (
-                rand_x0 < xr + patch_size
-                and x1 > xr
-                and rand_y0 < yr + patch_size
-                and y1 > yr
-            )
-            for xr, yr in chosen_regions
+            abs(cx - c[0]) < patch_size and abs(cy - c[1]) < patch_size
+            for c in chosen_centers
         )
         if not overlap:
-            chosen_regions.append((rand_x0, rand_y0))
-            locations.append((rand_x0, rand_y0))
+            chosen_centers.append((cx, cy))
         attempts += 1
 
-    if len(chosen_regions) < max_patches:
-        print(f"Warning: Only {len(chosen_regions)} non-overlapping patches found.")
+    if len(chosen_centers) < max_patches:
+        print(f"Warning: Only {len(chosen_centers)} non-overlapping patches found.")
 
-    return locations
+    return chosen_centers
 
 
-def random_patch(location, catalogue_type="wide", patch_size=1.0):
+def random_patch(center, catalogue_type="wide", patch_size=1.0):
+    """
+    Extract a patch around a given center (cx, cy) in flat-sky coordinates.
+    Returns the galaxies in the patch and RA/Dec of the patch center.
+    """
     catalogue = pd.read_pickle(f"{TRECS_DIR}/catalog_{catalogue_type}.pkl")
 
-    # Choose patch location
-    x0, y0 = location
-    x1 = x0 + patch_size
-    y1 = y0 + patch_size
-
-    # Compute patch centre in flat-sky coords
-    cx = x0 + patch_size / 2.0
-    cy = y0 + patch_size / 2.0
+    cx, cy = center
+    x0, y0 = cx - patch_size / 2, cy - patch_size / 2
+    x1, y1 = cx + patch_size / 2, cy + patch_size / 2
 
     # Select galaxies inside patch
     patch = catalogue[
@@ -112,39 +135,22 @@ def random_patch(location, catalogue_type="wide", patch_size=1.0):
         & (catalogue["y"] < y1)
     ].copy()
 
-    #  Drop galaxies which are too close to the edge
+    # Drop galaxies too close to patch edge
+    margin = SCALE_DEGREES * 130
     mask = (
-        (patch["x"] - SCALE_DEGREES * 130 >= x0)
-        & (patch["x"] + SCALE_DEGREES * 130 <= x1)
-        & (patch["y"] - SCALE_DEGREES * 130 >= y0)
-        & (patch["y"] + SCALE_DEGREES * 130 <= y1)
+        (patch["x"] - margin >= x0)
+        & (patch["x"] + margin <= x1)
+        & (patch["y"] - margin >= y0)
+        & (patch["y"] + margin <= y1)
     )
     patch = patch[mask].copy()
 
-    # Drop old RA/Dec columns if present
+    # Drop old RA/Dec if present
     for col in ["ra", "dec"]:
         if col in patch.columns:
             patch.drop(columns=col, inplace=True)
 
-    # x,y are offsets in degrees relative to RA0,Dec0
-    offset_coords = SkyCoord(
-        lon=-patch["x"].values * u.deg,
-        lat=patch["y"].values * u.deg,
-        frame=offset_frame,
-    )
-
-    # Convert back to ICRS RA,Dec for galaxies
-    icrs_coords = offset_coords.icrs
-    patch["RA"] = icrs_coords.ra.deg
-    patch["Dec"] = icrs_coords.dec.deg
-
-    # Convert patch centre to RA,Dec
-    centre_offset = SkyCoord(lon=-cx * u.deg, lat=cy * u.deg, frame=offset_frame)
-    centre_icrs = centre_offset.icrs
-    centre_ra = centre_icrs.ra.deg
-    centre_dec = centre_icrs.dec.deg
-
-    return patch, (centre_ra, centre_dec)
+    return patch
 
 
 def filter_patch_by_flux(
@@ -174,30 +180,37 @@ def filter_patch_by_size(
 # %% Wide-field Simulation Functions
 
 
-def compute_pixel_coordinates(patch, bottom_left):
-    x0, y0 = bottom_left
+def compute_pixel_coordinates(patch, patch_center, NPIX_SKY=NPIX_SKY):
+    """
+    Compute pixel positions and RA/Dec of galaxies relative to patch center.
+    patch_center: (cx, cy) flat-sky degrees
+    """
+    cx, cy = patch_center
     patch_out = patch.copy()
 
-    # Integer pixel positions relative to bottom-left corner
-    patch_out["pix_x"] = ((patch_out["x"] - x0) / SCALE_DEGREES).astype(int)
-    patch_out["pix_y"] = ((patch_out["y"] - y0) / SCALE_DEGREES).astype(int)
+    dx = ((patch_out["x"] - cx) / SCALE_DEGREES).astype(int)
+    dy = ((patch_out["y"] - cy) / SCALE_DEGREES).astype(int)
 
-    # Convert pixel positions back to RA/Dec
-    pix_x_deg = x0 + patch_out["pix_x"].values * SCALE_DEGREES
-    pix_y_deg = y0 + patch_out["pix_y"].values * SCALE_DEGREES
-    offset_coords = SkyCoord(
-        lon=-pix_x_deg * u.deg,
-        lat=pix_y_deg * u.deg,
-        frame=offset_frame,  # Must be defined externally as the same origin
+    for col in ["x", "y"]:
+        patch.drop(columns=col, inplace=True)
+
+    # Pixel coordinates relative to patch center
+    patch_out["pix_x"] = dx + NPIX_SKY // 2
+    patch_out["pix_y"] = dy + NPIX_SKY // 2
+
+    # Convert to RA/Dec
+    patch_centre = _xy_to_radec(patch_center)
+    patch_centre_ra, patch_centre_dec = patch_centre
+
+    patch_out["RA"] = patch_centre_ra - SCALE_DEGREES * dx / np.cos(
+        np.deg2rad(patch_centre_dec)
     )
-    icrs_coords = offset_coords.icrs
-    patch_out["RA_pix"] = icrs_coords.ra.deg
-    patch_out["Dec_pix"] = icrs_coords.dec.deg
+    patch_out["Dec"] = patch_centre_dec + SCALE_DEGREES * dy
 
-    return patch_out
+    return patch_out, patch_centre
 
 
-def simulate_galaxy(row, simple=False, min_flux=10e-6):
+def _simulate_galaxy(row, simple=False, min_flux=10e-6):
     flux = row["flux"]
     scale_length = row["size"]
     e1 = row["e1"]
@@ -235,33 +248,32 @@ def simulate_galaxy(row, simple=False, min_flux=10e-6):
     return stamp, sersic_index, isolated_stamp
 
 
-def simulate_wide_field(patch, bottom_left, NPIX_SKY=NPIX_SKY, **kwargs):
+def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     verbosity = kwargs.get("verbosity", 0)
     simple = kwargs.get("simple", False)
     min_flux = kwargs.get("min_flux", 10e-6)
 
-    # Step 1: Compute pixel coordinates & RA/Dec
-    patch_out = compute_pixel_coordinates(patch, bottom_left)
-
-    # Step 2: Initialize wide-field image
+    # Step 1: Initialize wide-field image
     field = galsim.ImageF(NPIX_SKY, NPIX_SKY, scale=SCALE_ARCSEC)
 
     if verbosity > 0:
         print(
-            f"Simulating wide-field of size {NPIX_SKY}x{NPIX_SKY} with {len(patch_out)} galaxies"
+            f"Simulating wide-field of size {NPIX_SKY}x{NPIX_SKY} with {len(patch)} galaxies"
         )
         print(
-            f"Intensity: [{np.min(patch_out['flux']) * 1e6:0.2f},{np.max(patch_out['flux']) * 1e6:0.2f}] uJy"
+            f"Intensity: [{np.min(patch['flux']) * 1e6:0.2f},{np.max(patch['flux']) * 1e6:0.2f}] uJy"
         )
         print(
-            f"Scale length: [{np.min(patch_out['size']):0.2f},{np.max(patch_out['size']):0.2f}] arcsec"
+            f"Scale length: [{np.min(patch['size']):0.2f},{np.max(patch['size']):0.2f}] arcsec"
         )
 
-    # Step 1: Run dask to simulate galaxies in parallel
+    # Step 2: Run dask to simulate galaxies in parallel
     def simulate_batch(batch, simple=simple, min_flux=min_flux):
-        return [simulate_galaxy(row, simple=simple, min_flux=min_flux) for row in batch]
+        return [
+            _simulate_galaxy(row, simple=simple, min_flux=min_flux) for row in batch
+        ]
 
-    rows = patch_out.to_dict(orient="records")
+    rows = patch.to_dict(orient="records")
 
     # chunk rows into groups of 100
     chunk_size = 100
@@ -275,11 +287,11 @@ def simulate_wide_field(patch, bottom_left, NPIX_SKY=NPIX_SKY, **kwargs):
     results = [r for batch in results for r in batch]
 
     # Extract sersic indexes
-    patch_out["sersic_index"] = np.stack([r[1] for r in results])
+    patch["sersic_index"] = np.stack([r[1] for r in results])
 
     # Extract isolated stamps and corresponding flux mask
     mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
-    patch_out["flux_mask"] = mask
+    patch["flux_mask"] = mask
     isolated_stamps = np.stack(
         [row[-1] for row in results if isinstance(row[-1], np.ndarray)]
     )
@@ -291,4 +303,4 @@ def simulate_wide_field(patch, bottom_left, NPIX_SKY=NPIX_SKY, **kwargs):
 
     sky_array = field.array.copy()
 
-    return sky_array, patch_out, isolated_stamps
+    return sky_array, patch, isolated_stamps

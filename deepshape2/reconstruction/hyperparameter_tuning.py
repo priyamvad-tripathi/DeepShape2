@@ -1,4 +1,5 @@
 # %% Imports
+import argparse
 import os
 import time
 
@@ -10,8 +11,9 @@ from torch.utils.data import DataLoader, TensorDataset
 from deepshape2.data.loaders import CenterCrop
 from deepshape2.models import VAE, create_model
 from deepshape2.utils import (
-    extract_image,
     get_freest_gpu,
+    get_progress_bar,
+    get_tqdm,
     load,
     load_config,
     load_h5,
@@ -24,13 +26,43 @@ from deepshape2.utils import (
 from deepshape2.visualization import plot
 
 # %% Constants / Configuration
-GRID_SIZE = 128
+
 SPLITS = [5, 10, 20, 30]
-USE_SPLIT = 3
-BATCH_SIZE = 256
 SCALE_FAC = 5e7
 N_PLOT = 5
 N_TRIALS = 200
+
+
+# %%
+def parse_args():
+    parser = argparse.ArgumentParser(description="Sky simulation arguments")
+
+    parser.add_argument(
+        "-f",
+        "--facet-size",
+        type=int,
+        default=256,
+        help="Facet size (default: 256)",
+    )
+
+    parser.add_argument(
+        "-s",
+        "--split-index",
+        type=int,
+        default=0,
+        help="Split index (default: 0)",
+    )
+
+    parser.add_argument(
+        "-b",
+        "--batch-size",
+        type=int,
+        default=128,
+        help="Batch size (default: 128)",
+    )
+
+    return parser.parse_args()
+
 
 # %% Helper Functions
 
@@ -46,7 +78,6 @@ def objective(trial, device, val_loader_subset, deblender, crop_fn):
     torch.cuda.empty_cache()
 
     psnr_values = []
-
     with torch.inference_mode():
         for im, isolated_stamp in val_loader_subset:
             im, isolated_stamp = (
@@ -72,81 +103,98 @@ def objective(trial, device, val_loader_subset, deblender, crop_fn):
 def evaluate_best_params(
     val_loader, best_params, device, deblender, crop_fn=CenterCrop(128), n=N_PLOT
 ):
-    """Evaluate PSNR and SSIM using best Optuna parameters and plot first n examples."""
+    """
+    Evaluate PSNR and SSIM using the best Optuna parameters and visualize examples.
+    """
+
+    # Initialize model
     model = create_model(device=device, **best_params)
     model.eval()
 
-    psnr_all, ssim_all = [], []
-    targets_all, inputs_all, outputs_all = [], [], []
+    # Containers for metrics and outputs
+    psnr_list, ssim_list = [], []
+    targets, inputs, outputs = [], [], []
 
-    with torch.inference_mode():
-        for im, isolated_stamp in val_loader:
-            im, isolated_stamp = (
-                im.to(device, non_blocking=True),
-                isolated_stamp.to(device, non_blocking=True),
-            )
+    # Progress bar
+    pbar = get_progress_bar(True, total=len(val_loader), **get_tqdm())
 
-            # Deconvolution and cropping
-            deconvolved = model(im)
-            decon_crop = crop_fn(deconvolved)
-            iso_crop = crop_fn(isolated_stamp)
+    with torch.inference_mode(), pbar:
+        for im, iso in val_loader:
+            im = im.to(device, non_blocking=True)
+            iso = iso.to(device, non_blocking=True)
 
-            # Deblend & inverse scale
-            decon_scaled = torch.arcsinh_(decon_crop * SCALE_FAC)
-            decon_deblended = deblender(decon_scaled)[0]
-            recon = torch.sinh_(decon_deblended) / SCALE_FAC
+            # --- Model inference ---
+            decon = crop_fn(model(im))
+            iso_crop = crop_fn(iso)
 
-            # Metrics
-            psnr_all.append(psnr_torch(recon, iso_crop.unsqueeze(1)))
-            ssim_all.append(
-                ssim_batch(recon.squeeze(1).cpu().numpy(), iso_crop.cpu().numpy())
-            )
+            # --- Deblending ---
+            decon_scaled = torch.arcsinh_(decon * SCALE_FAC)
+            deblended = deblender(decon_scaled)[0]
+            recon = torch.sinh_(deblended) / SCALE_FAC
 
-            targets_all.append(iso_crop.cpu())
-            inputs_all.append(im[:, 0].cpu())  # first channel of input
-            outputs_all.append(recon.squeeze(1).cpu())
+            # --- Move to CPU once ---
+            recon_cpu = recon.squeeze(1).cpu()
+            iso_cpu = iso_crop.cpu()
+            inp_cpu = crop_fn(im[:, 0]).cpu()
 
-    psnr_mean = torch.cat(psnr_all).mean().item()
-    ssim_mean = np.concatenate(ssim_all).mean()
-    print(f"Average PSNR: {psnr_mean:.3f} dB | Average SSIM: {ssim_mean:.3f}")
+            # --- Metrics ---
+            psnr = psnr_torch(recon_cpu.unsqueeze(1), iso_cpu.unsqueeze(1))
+            ssim = ssim_batch(recon_cpu.numpy(), iso_cpu.numpy())
 
+            psnr_list.append(psnr)
+            ssim_list.append(ssim)
+            targets.append(iso_cpu)
+            inputs.append(inp_cpu)
+            outputs.append(recon_cpu)
+
+            pbar.update(1)
+
+    # --- Aggregate ---
+    psnr_all = torch.cat(psnr_list).numpy()
+    ssim_all = np.concatenate(ssim_list)
+    targets_all = torch.cat(targets).numpy()
+    inputs_all = torch.cat(inputs).numpy()
+    outputs_all = torch.cat(outputs).numpy()
+
+    # --- Report ---
+    print(
+        f"SSIM: Max {ssim_all.max():.03f} | Min {ssim_all.min():.03f} | Mean {ssim_all.mean():.03f}"
+    )
+    print(
+        f"PSNR: Max {psnr_all.max():.03f} dB | Min {psnr_all.min():.03f} dB | Mean {psnr_all.mean():.03f} dB"
+    )
+
+    # --- Visualization ---
     if n > 0:
-        # Stack first n examples
-        targets_all = torch.cat(targets_all)[:n].numpy()
-        inputs_all = torch.cat(inputs_all)[:n].numpy()
-        outputs_all = torch.cat(outputs_all)[:n].numpy()
-        tit_out = [
-            f"{s:.02f}/{p:.02f} dB"
-            for s, p in zip(
-                np.concatenate(ssim_all)[:n], torch.cat(psnr_all)[:n].numpy()
-            )
+        subtitles = [None] * n
+        metrics_str = [
+            f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_all[:n], psnr_all[:n])
         ]
-        blank_titles = [None] * n
 
         plot(
-            images=[targets_all, inputs_all, outputs_all, targets_all - outputs_all],
+            images=[
+                targets_all[:n],
+                inputs_all[:n],
+                outputs_all[:n],
+                targets_all[:n] - outputs_all[:n],
+            ],
             caption=["Target", "Input", "Recon", "Residual"],
             cbar=True,
-            scale_row=0,
-            same_scale=[0, 1, 2],
-            subtitles=[blank_titles, blank_titles, tit_out, blank_titles],
+            subtitles=[subtitles, subtitles, metrics_str, subtitles],
         )
 
 
 # %% Main Execution
 if __name__ == "__main__":
+    args = parse_args()
+    GRID_SIZE = args.facet_size
+    USE_SPLIT = args.split_index
+    BATCH_SIZE = args.batch_size
+
     # --- Load Config and Data
     cfg = load_config()
     DATA_DIR = cfg["DATA_DIR"]
     facet_data = load_h5(DATA_DIR + "facets.h5")
-    isolated_stamps_path = DATA_DIR + "isolated_stamps_patch_051_ws_npix_128.pkl"
-    if os.path.exists(isolated_stamps_path):
-        isolated_stamps = load(isolated_stamps_path)
-    else:
-        with load_h5(DATA_DIR + "wide_set.h5") as wide_set:
-            isolated_stamps = extract_image(
-                wide_set["patch_051/blended_stamps"][:], 128
-            )
 
     # --- Torch setup
     device = get_freest_gpu(set_device=True)
@@ -173,6 +221,8 @@ if __name__ == "__main__":
     psf = facet_data[f"wide/facets_{GRID_SIZE}/psf"][:]
     im_all = np.stack([dirty_all, psf], axis=1)
 
+    isolated_stamps = facet_data["wide/isolated_stamps"][:]
+
     im_all_t = torch.from_numpy(im_all)
     stamps_t = torch.from_numpy(isolated_stamps)
     dataset_all = TensorDataset(im_all_t, stamps_t)
@@ -182,8 +232,8 @@ if __name__ == "__main__":
     threshold = np.percentile(peak, SPLITS[USE_SPLIT])
     mask = np.where(peak > threshold)[0]
 
-    # Limit to at most 2000 samples
-    max_samples = 2000
+    # Limit to at most 1000 samples
+    max_samples = 1000
     num_samples = min(len(mask), max_samples)
 
     # Randomly sample indices without replacement
@@ -208,7 +258,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = f"facets_{GRID_SIZE}_split_{SPLITS[USE_SPLIT]}_trials_{N_TRIALS}"
+    study_name = f"facets_{GRID_SIZE}_split_{SPLITS[USE_SPLIT]}"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(
@@ -225,9 +275,7 @@ if __name__ == "__main__":
     )
 
     # --- Save best parameters
-    best_params_dict[f"facets_{GRID_SIZE}"] = {
-        f"split_{SPLITS[USE_SPLIT]}": study.best_params
-    }
+    best_params_dict[study_name] = study.best_params.copy()
     save(best_params_dict, optuna_best_params_path)
 
     print("Optuna Hyperparameter Tuning Complete.")

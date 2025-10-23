@@ -26,7 +26,8 @@ class HQS_PnP(nn.Module):
     ):
         super().__init__()
         self.denoiser = denoiser
-        self.sigma_k = np.geomspace(f1 * SIGMA, f2 * SIGMA, niter)[::-1]
+        sigma_np = np.geomspace(f1 * SIGMA, f2 * SIGMA, niter)[::-1].copy()
+        self.sigma_k = torch.tensor(sigma_np, dtype=torch.float32)
         self.alpha_k = falpha * (SIGMA**2) / (self.sigma_k**2)
 
     def pad_batch(self, im_batch):
@@ -64,17 +65,13 @@ class HQS_PnP(nn.Module):
 
         z = dirty.clone().detach()
 
-        for alpha, sigma in zip(self.alpha_k, self.sigma_k):
-            with torch.amp.autocast("cuda", dtype=torch.float32):
-                x = self.iteration_step(z, dirty, fpsf, alpha).clone().detach()
-
+        with torch.inference_mode(), torch.amp.autocast("cuda", dtype=torch.float32):
+            for alpha, sigma in zip(self.alpha_k, self.sigma_k):
+                x = self.iteration_step(z, dirty, fpsf, alpha)
                 x = self.unpad_image(x)
 
-                if self.denoiser is not None:
-                    denoised = self.pad_batch(self.denoiser(x, sigma).clone().detach())
-                    z.copy_(denoised)
-                else:
-                    z.copy_(x)
+                denoised = self.denoiser(x, sigma)
+                z.copy_(self.pad_batch(denoised))
 
         return self.unpad_image(z)
 

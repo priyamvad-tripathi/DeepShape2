@@ -215,7 +215,6 @@ def _simulate_galaxy(row, simple=False, min_flux=10e-6):
     scale_length = row["size"]
     e1 = row["e1"]
     e2 = row["e2"]
-    pos = galsim.PositionI(row["pix_x"], row["pix_y"])
 
     if simple:
         sersic_index = 1
@@ -231,13 +230,10 @@ def _simulate_galaxy(row, simple=False, min_flux=10e-6):
     gal_true = gal.shear(e_tot)
 
     nx = gal_true.getGoodImageSize(pixel_scale=SCALE_ARCSEC)
+    bounds = galsim.BoundsI(0, nx - 1, 0, nx - 1)
+    stamp = galsim.ImageF(bounds, scale=SCALE_ARCSEC)
 
-    stamp = gal_true.drawImage(
-        nx=nx,
-        ny=nx,
-        scale=SCALE_ARCSEC,
-        center=pos,
-    )
+    gal_true.drawImage(stamp, center=galsim.PositionI(nx // 2, nx // 2))
     stamp.replaceNegative(replace_value=0)
 
     if flux < min_flux:
@@ -254,7 +250,8 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     min_flux = kwargs.get("min_flux", 10e-6)
 
     # Step 1: Initialize wide-field image
-    field = galsim.ImageF(NPIX_SKY, NPIX_SKY, scale=SCALE_ARCSEC)
+    bounds = galsim.BoundsI(0, NPIX_SKY - 1, 0, NPIX_SKY - 1)
+    field = galsim.ImageF(bounds, scale=SCALE_ARCSEC)
 
     if verbosity > 0:
         print(
@@ -273,7 +270,8 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
             _simulate_galaxy(row, simple=simple, min_flux=min_flux) for row in batch
         ]
 
-    rows = patch.to_dict(orient="records")
+    cols = ["flux", "size", "e1", "e2"]
+    rows = patch[cols].to_dict(orient="records")
 
     # chunk rows into groups of 100
     chunk_size = 100
@@ -297,9 +295,26 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     )
 
     # Step 3: Add full galaxy stamps to wide-field image
-    for stamp, *_ in results:
-        bounds = stamp.bounds & field.bounds
-        field[bounds] += stamp[bounds]
+    for result, cx, cy in zip(results, patch["pix_x"], patch["pix_y"]):
+        stamp, *_ = result
+        stamp_size = stamp.array.shape[0]
+        half_nx = stamp_size // 2
+
+        # Compute bounds for stamp placement in field
+        x_min = cx - half_nx
+        x_max = x_min + stamp_size - 1
+        y_min = cy - half_nx
+        y_max = y_min + stamp_size - 1
+
+        # Create a new GalSim image with bounds at the desired field coordinates
+        stamp_img = galsim.ImageF(galsim.BoundsI(x_min, x_max, y_min, y_max))
+
+        # Copy the original stamp into the new image
+        stamp_img.array[:, :] = stamp.array.copy()
+
+        # Add to field
+        bounds = stamp_img.bounds & field.bounds
+        field[bounds] += stamp_img[bounds]
 
     sky_array = field.array.copy()
 

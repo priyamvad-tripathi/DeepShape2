@@ -198,5 +198,5 @@ def shape_galsim(image, NPIX=128):
 def print_peak(img):
     """Print and return the coordinates of the peak (max value) in a 2D image array."""
     peak_idx = np.unravel_index(np.argmax(img), img.shape)
-    print(f"Peak position: {peak_idx}, value: {img[peak_idx]:.4f}")
+    print(f"Peak position: {peak_idx}, value: {img[peak_idx]:.3e}")
     return peak_idx

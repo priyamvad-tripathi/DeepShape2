@@ -8,6 +8,7 @@ __all__ = [
     "get_stamps",
     "process_stamp",
     "centers_to_limits",
+    "print_peak",
 ]
 
 # %% Image extraction functions
@@ -192,3 +193,10 @@ def shape_galsim(image, NPIX=128):
     g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
 
     return g, shape.moments_status
+
+
+def print_peak(img):
+    """Print and return the coordinates of the peak (max value) in a 2D image array."""
+    peak_idx = np.unravel_index(np.argmax(img), img.shape)
+    print(f"Peak position: {peak_idx}, value: {img[peak_idx]:.3e}")
+    return peak_idx

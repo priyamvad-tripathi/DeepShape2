@@ -8,6 +8,7 @@ import numpy as np
 from dask.distributed import Client, LocalCluster
 
 from deepshape2.simulation import (
+    compute_pixel_coordinates,
     filter_patch_by_flux,
     filter_patch_by_size,
     random_patch,
@@ -70,9 +71,10 @@ if __name__ == "__main__":
         group = data.create_group("patch_000")
 
         # Extract galaxies at patch location
-        location = (-0.5, -0.5)
-        patch, centre = random_patch(location=location, catalogue_type="deep")
+        location = (0, 0)
+        patch = random_patch(location)
         patch = filter_patch_by_size(filter_patch_by_flux(patch))
+        patch, centre = compute_pixel_coordinates(patch, location)
         print(f"Number of galaxies in patch: {len(patch)}")
 
         # Simulate wide-field image of the patch

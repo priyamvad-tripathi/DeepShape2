@@ -1,9 +1,13 @@
 # %% Load Modules
 import warnings
 
+import astropy.units as u
 import galsim
 import numpy as np
 import pandas as pd
+from astropy.coordinates import SkyCoord
+
+# from astropy.wcs import WCS
 from dask import compute, delayed
 
 from deepshape2.utils import load_config, process_stamp
@@ -34,7 +38,7 @@ big_fft_params = galsim.GSParams(maximum_fft_size=FFTBIGSIZE)
 # Cache Sersic Indexes for faster galsim implementation
 sersic_indexes = np.linspace(0.7, 2, 100)
 
-# Sky centre
+# Sky center
 RA0 = cfg["RA0"]
 DEC0 = cfg["DEC0"]
 
@@ -46,41 +50,6 @@ NPIX_SKY = cfg["NPIX_SKY"]
 NPIX_STAMP = 256
 
 TRECS_DIR = cfg["TRECS_DIR"]
-
-# %% Coordinate Conversion Function
-
-
-def _xy_to_radec(patch_center, center=[RA0, DEC0]):
-    """
-    Convert flat-sky offsets (x, y) in degrees to RA, Dec in degrees
-    using small-angle approximation around a reference center.
-
-    Parameters
-    ----------
-    patch_center : array-like
-        (x, y) in degrees; center of the patch.
-    center : tuple
-        (ra0, dec0) in degrees; reference patch center.
-
-    Returns
-    -------
-    radec : Shape [2,]
-    """
-
-    ra0, dec0 = center
-    dec0_rad = np.deg2rad(dec0)
-
-    x, y = patch_center
-
-    # Small-angle conversion
-    ra = ra0 - x / np.cos(dec0_rad)
-    dec = dec0 + y
-
-    # Normalize RA to [0,360)
-    ra = np.mod(ra, 360.0)
-
-    return np.array([ra, dec])
-
 
 # %% Catalogue Processing Functions
 
@@ -180,34 +149,50 @@ def filter_patch_by_size(
 # %% Wide-field Simulation Functions
 
 
-def compute_pixel_coordinates(patch, patch_center, NPIX_SKY=NPIX_SKY):
+def compute_pixel_coordinates(patch, patch_center_flat, NPIX_SKY=NPIX_SKY):
     """
     Compute pixel positions and RA/Dec of galaxies relative to patch center.
-    patch_center: (cx, cy) flat-sky degrees
+
+    Parameters
+    ----------
+    patch : pd.DataFrame
+        Must have columns 'x', 'y' in flat-sky degrees
+    patch_center_flat : tuple
+        (x, y) coordinates of patch center in flat-sky degrees
+    NPIX_SKY : int
+        Size of the square wide-field image in pixels
+
+    Returns
+    -------
+    patch_out : pd.DataFrame
+        Copy of patch with 'pix_x', 'pix_y', 'RA', 'Dec'
+    patch_center_ra_dec : np.ndarray
+        RA/Dec of patch center
     """
-    cx, cy = patch_center
+    cx, cy = patch_center_flat
     patch_out = patch.copy()
 
+    # Offsets in pixels relative to patch center
     dx = ((patch_out["x"] - cx) / SCALE_DEGREES).astype(int)
     dy = ((patch_out["y"] - cy) / SCALE_DEGREES).astype(int)
 
-    for col in ["x", "y"]:
-        patch.drop(columns=col, inplace=True)
-
-    # Pixel coordinates relative to patch center
+    # Pixel coordinates
     patch_out["pix_x"] = dx + NPIX_SKY // 2
     patch_out["pix_y"] = dy + NPIX_SKY // 2
 
-    # Convert to RA/Dec
-    patch_centre = _xy_to_radec(patch_center)
-    patch_centre_ra, patch_centre_dec = patch_centre
+    # Remove flat-sky columns
+    patch_out = patch_out.drop(columns=["x", "y"], errors="ignore")
 
-    patch_out["RA"] = patch_centre_ra - SCALE_DEGREES * dx / np.cos(
-        np.deg2rad(patch_centre_dec)
+    # RA/Dec of patch center using _xy_to_radec
+    origin = SkyCoord(RA0 * u.deg, DEC0 * u.deg, frame="icrs")
+    patch_center_coord = origin.spherical_offsets_by(
+        d_lat=cy * u.deg, d_lon=-cx * u.deg
     )
-    patch_out["Dec"] = patch_centre_dec + SCALE_DEGREES * dy
+    patch_center_ra_dec = np.array(
+        [patch_center_coord.ra.deg, patch_center_coord.dec.deg]
+    )
 
-    return patch_out, patch_centre
+    return patch_out, patch_center_ra_dec
 
 
 def _simulate_galaxy(row, simple=False, min_flux=10e-6):

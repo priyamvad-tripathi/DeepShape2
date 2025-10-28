@@ -364,9 +364,27 @@ predict(model, val_loader, weights=best_weights)
 
 # %% Save Model
 
-# model.load_state_dict(best_weights)
-# model_scripted = torch.jit.script(model)
-# torch.jit.save(
-#     m=model_scripted,
-#     f=loc_weights[:-3] + "_jit.pt",
-# )
+ckp = torch.load(
+    cfg["MODEL_DIR"] + "autoencoder.pt", map_location="cpu", weights_only=False
+)
+state = ckp["best_weights"]
+# 2️⃣ Remove unwanted prefixes introduced by torch.compile()
+#    (and optionally from DDP if you used multiple GPUs)
+clean_state = {}
+for k, v in state.items():
+    k = k.replace("_orig_mod.", "")  # remove torch.compile wrapper
+    k = k.replace("module.", "")  # remove DDP wrapper if present
+    clean_state[k] = v
+
+# 3️⃣ Create the *uncompiled* model
+model = Autoender(attention=False)
+
+# 4️⃣ Load weights safely
+model.load_state_dict(clean_state, strict=False)
+model.eval()
+
+# 5️⃣ Convert to TorchScript
+scripted_model = torch.jit.script(model)
+scripted_model.save(cfg["MODEL_DIR"] + "autoencoder_jit.pt")
+
+print("✅ Successfully loaded uncompiled model and saved as TorchScript.")

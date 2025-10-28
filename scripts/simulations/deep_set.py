@@ -27,8 +27,8 @@ def parse_args():
         "-w",
         "--n-workers",
         type=int,
-        default=50,
-        help="Number of Dask workers to use (default: 50)",
+        default=64,
+        help="Number of Dask workers to use (default: 64)",
     )
 
     return parser.parse_args()
@@ -79,18 +79,18 @@ if __name__ == "__main__":
 
         # Simulate wide-field image of the patch
         sky_array, patch_out, isolated_stamps = simulate_wide_field(
-            patch, location, min_flux=MIN_FLUX
+            patch, min_flux=MIN_FLUX
         )
 
-        locs_pix = patch_out[["pix_x", "pix_y"]].values
+        galaxy_locations = patch_out[["pix_x", "pix_y"]].values
         mask = patch_out["flux_mask"].values
 
-        centers = locs_pix[mask]
+        galaxy_centers = galaxy_locations[mask]
 
-        lims = centers_to_limits(centers, stamp_size=NPIX_STAMP)
+        lims = centers_to_limits(galaxy_centers, stamp_size=NPIX_STAMP)
 
         print(
-            f"Number of bright galaxies (flux>={MIN_FLUX * 1e6:.0f}uJy): {len(centers)}"
+            f"Number of bright galaxies (flux>={MIN_FLUX * 1e6:.0f}uJy): {len(galaxy_centers)}"
         )
 
         # Save results
@@ -122,8 +122,8 @@ if __name__ == "__main__":
             patch_out,
             patch_rec,
             isolated_stamps,
-            locs_pix,
-            centers,
+            galaxy_locations,
+            galaxy_centers,
             sky_array,
         )
 

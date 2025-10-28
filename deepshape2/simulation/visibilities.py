@@ -22,6 +22,7 @@ from ska_sdp_func_python.util.coordinate_support import skycoord_to_lmn
 from ska_sdp_func_python.visibility import (
     calculate_visibility_phasor,
     calculate_visibility_uvw_lambda,
+    phaserotate_visibility,
 )
 
 from deepshape2.utils import load_config
@@ -43,6 +44,10 @@ BANDWIDTH = 0.3 * FREQUENCY
 INTEGRATION_TIME = cfg["integration_time"]
 HA_INTERVAL = cfg["ha_interval"]
 CELLSIZE = cfg["SCALE_RADIANS"]
+
+SCALE_RADIANS = cfg["SCALE_RADIANS"]
+
+NPIX_SKY = cfg["NPIX_SKY"]
 
 
 # %% Core helpers
@@ -351,7 +356,12 @@ def add_noise_to_visibility(vis: xarray.Dataset, **kwargs):
     return noisy_vis
 
 
-def rephase_visibility(vis: xarray.Dataset, new_phasecentre, remove_w=True):
+def rephase_visibility(
+    vis: xarray.Dataset,
+    pix_loc,
+    remove_w=True,
+    no_correction=False,
+):
     """
     Change the phase centre of a visibility dataset by applying a phasor and
     optionally rotating the uvw coordinates.
@@ -371,21 +381,33 @@ def rephase_visibility(vis: xarray.Dataset, new_phasecentre, remove_w=True):
             New visibility dataset with updated vis and uvw (and phasecentre attr).
     """
 
-    new_phasecentre_skycoord = SkyCoord(
-        ra=new_phasecentre[0] * u.deg,
-        dec=new_phasecentre[1] * u.deg,
-        frame="icrs",
-        equinox="J2000",
+    newvis = vis.copy(deep=True)
+
+    # --- Compute pixel offsets from image centre ---
+    x_pix, y_pix = pix_loc
+    dx = x_pix - NPIX_SKY // 2.0
+    dy = y_pix - NPIX_SKY // 2.0
+
+    # --- Compute new phasecentre SkyCoord ---
+    pointing_centre = newvis.attrs["phasecentre"]
+
+    offset_ra = -dx * SCALE_RADIANS * u.rad
+    offset_dec = dy * SCALE_RADIANS * u.rad
+
+    new_phasecentre_skycoord = pointing_centre.spherical_offsets_by(
+        offset_ra, offset_dec
     )
 
-    dl, dm, _ = skycoord_to_lmn(new_phasecentre_skycoord, vis.phasecentre)
+    if no_correction:
+        newvis = phaserotate_visibility(newvis, new_phasecentre_skycoord, tangent=False)
+        return newvis
+
+    dl, dm, _ = skycoord_to_lmn(new_phasecentre_skycoord, newvis.phasecentre)
     dn = np.sqrt(1.0 - dl**2 - dm**2)
 
     if np.abs(dn) < 1e-15:
         # No meaningful change
-        return vis
-
-    newvis = vis.copy(deep=True)
+        return newvis
 
     # Apply phase rotation phasor (multiply by conjugate to shift phasecentre)
     phasor = calculate_visibility_phasor(new_phasecentre_skycoord, newvis)

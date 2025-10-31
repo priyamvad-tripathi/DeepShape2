@@ -113,7 +113,7 @@ def train(
 
                 optimizer.zero_grad(set_to_none=True)
                 out = model(inp)
-                if not variational:
+                if variational:
                     loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
                 else:
                     recon = torch.nn.functional.mse_loss(out, target)
@@ -288,7 +288,7 @@ def predict(
                 target_gpu = target.to(device, non_blocking=True)
 
                 out = model(inp_gpu)
-                if not variational:
+                if variational:
                     out = out[0]
 
                 # Append GPU tensors

@@ -39,12 +39,12 @@ tqdm_kwargs = get_tqdm()
 
 
 # %% Functions
-def _process_facet(vis: xarray.Dataset, gal_center, NPIX_facet=256):
+def _process_facet(vis: xarray.Dataset, galaxy_location, NPIX_facet=256):
     """
     Process a single galaxy location:
     recenter visibilities, invert to get dirty and PSF facets.
     """
-    vis_recentered = rephase_visibility(vis, gal_center)
+    vis_recentered = rephase_visibility(vis, galaxy_location)
     return make_dirty_image_and_psf(vis_recentered, NPIX=NPIX_facet, do_wstacking=False)
 
 
@@ -66,7 +66,9 @@ def chunked_iterable(seq, size):
 def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=None):
     dirty_all, psf_all = [], []
     n = len(galaxy_locations)
+    total_batches = (n + batch_size - 1) // batch_size  # ceiling division
     start = time.time()
+
     for i in range(0, n, batch_size):
         loc_batch = galaxy_locations[i : i + batch_size]
 
@@ -79,8 +81,10 @@ def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=Non
         dirty_all.append(np.stack(dirty))
         psf_all.append(np.stack(psf))
 
-        post_step(f"processing batch {i // batch_size + 1}", start, client=client)
-        # client.restart()
+        current_batch = i // batch_size + 1
+        post_step(
+            f"processing batch {current_batch}/{total_batches}", start, client=client
+        )
 
     return np.concatenate(dirty_all), np.concatenate(psf_all)
 
@@ -224,7 +228,7 @@ if __name__ == "__main__":
                 data=patch_df["flux"][mask].values,
                 compression="gzip",
             )
-            galaxy_locations = patch_df[["RA_pix", "Dec_pix"]].to_numpy()[mask]
+            galaxy_locations = patch_df[["pix_x", "pix_y"]].to_numpy()[mask]
 
             # --- Stamp images
             isolated_stamps = patch_data[info["patch_key"]]["isolated_stamps"][:]

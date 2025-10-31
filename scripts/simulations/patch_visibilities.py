@@ -8,7 +8,7 @@ from deepshape2.utils import load_config, load_h5, post_step, save
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 
-patches = {"deep_set": "patch_000", "wide_set": "patch_051"}
+patches = {"wide_set": "patch_051", "deep_set": "patch_000"}
 
 dirty_wide = {}
 start = time.time()

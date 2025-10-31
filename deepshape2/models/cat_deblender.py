@@ -5,6 +5,8 @@ import torch.nn as nn
 # from timm.models.layers import DropPath
 from einops import rearrange
 
+__all__ = ["CAT_Unet"]
+
 
 # %%
 def img2windows(img, H_sp, W_sp):

@@ -9,6 +9,7 @@ from colorist import Color
 from dask.distributed import Client, LocalCluster
 
 from deepshape2.simulation import (
+    compute_pixel_coordinates,
     filter_patch_by_flux,
     filter_patch_by_size,
     generate_patch_locations,
@@ -28,16 +29,16 @@ def parse_args():
         "-w",
         "--n-workers",
         type=int,
-        default=50,
-        help="Number of Dask workers to use (default: 50)",
+        default=64,
+        help="Number of Dask workers to use (default: 64)",
     )
 
     parser.add_argument(
         "-nf",
         "--n-patches",
         type=int,
-        default=50,
-        help="Number of simulated patches (each 1 deg2 wide) (default: 50)",
+        default=60,
+        help="Number of simulated patches (each 1 deg2 wide) (default: 60)",
     )
 
     return parser.parse_args()
@@ -62,7 +63,7 @@ if __name__ == "__main__":
     NUM_PATCHES = args.n_patches
     MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
 
-    data = load_h5(DATA_DIR + "wide_set.h5", mode="a", delete_if_exists=False)
+    data = load_h5(DATA_DIR + "wide_set.h5", mode="a", delete_if_exists=True)
     # data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
     start = time.time()
@@ -78,12 +79,13 @@ if __name__ == "__main__":
     ):
         print(client.dashboard_link)
 
-        locations = generate_patch_locations()[:NUM_PATCHES]
+        patch_locations = generate_patch_locations()[:NUM_PATCHES]
 
-        for nl, location in enumerate(locations):
+        for nl, location in enumerate(patch_locations):
             print(
                 f"{Color.GREEN}Simulating patch {nl + 1}/{NUM_PATCHES} at location ({location[0]:.3f}, {location[1]:.3f}){Color.OFF}"
             )
+
 
             if f"patch_{nl + 1:03d}" in data:
                 print(f"Patch {nl + 1} already exists. Skipping...")
@@ -92,24 +94,26 @@ if __name__ == "__main__":
             group = data.create_group(f"patch_{nl + 1:03d}")
 
             # Extract galaxies at patch location
-            patch, centre = random_patch(location)
+            patch = random_patch(location)
             patch = filter_patch_by_size(filter_patch_by_flux(patch))
+            patch, centre = compute_pixel_coordinates(patch, location)
+
             print(f"Number of galaxies in patch: {len(patch)}")
 
             # Simulate wide-field image of the patch
             sky_array, patch_out, isolated_stamps = simulate_wide_field(
-                patch, location, min_flux=MIN_FLUX
+                patch, min_flux=MIN_FLUX
             )
 
-            locs_pix = patch_out[["pix_x", "pix_y"]].values
+            galaxy_locations = patch_out[["pix_x", "pix_y"]].values
             mask = patch_out["flux_mask"].values
 
-            centers = locs_pix[mask]
+            galaxy_centers = galaxy_locations[mask]
 
-            lims = centers_to_limits(centers, stamp_size=NPIX_STAMP)
+            lims = centers_to_limits(galaxy_centers, stamp_size=NPIX_STAMP)
 
             print(
-                f"Number of bright galaxies (flux>={MIN_FLUX * 1e6:.0f}uJy): {len(centers)}"
+                f"Number of bright galaxies (flux>={MIN_FLUX * 1e6:.0f}uJy): {len(galaxy_centers)}"
             )
 
             # Save results
@@ -141,8 +145,8 @@ if __name__ == "__main__":
                 patch_out,
                 patch_rec,
                 isolated_stamps,
-                locs_pix,
-                centers,
+                galaxy_locations,
+                galaxy_centers,
                 sky_array,
             )
 

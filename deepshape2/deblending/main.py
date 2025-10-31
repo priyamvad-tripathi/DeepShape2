@@ -16,7 +16,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_deblender_no_MHA.pt"
 
 scale_fac = cfg["scale_fac"]
 
@@ -26,14 +26,14 @@ set_seed()
 
 # %% Load Data into loaders
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(45)]
+group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:40], group_names[40:]
+group_names_train, group_names_val = group_names[:45], group_names[45:50]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky_50.h5",
+    path=DATA_DIR + "wide_set.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
@@ -41,7 +41,7 @@ train_dataset = loaders.BlendDataset(
 )
 
 val_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "sky_50.h5",
+    path=DATA_DIR + "wide_set.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
@@ -68,7 +68,7 @@ val_loader = DataLoader(
 )
 
 # Load the VAE model
-model = VAE()
+model = VAE(attention=False)
 model = model.to(device)
 
 # %% Train the model and plot results

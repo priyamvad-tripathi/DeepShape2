@@ -59,6 +59,7 @@ def train(
     precision = kwargs.get("precision", 4)
     tqdm_enabled = kwargs.get("tqdm_enabled", True)
     tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
+    variational = kwargs.get("variational", True)
 
     scheduler = None
     if scheduler_params:
@@ -112,7 +113,12 @@ def train(
 
                 optimizer.zero_grad(set_to_none=True)
                 out = model(inp)
-                loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
+                if not variational:
+                    loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
+                else:
+                    recon = torch.nn.functional.mse_loss(out, target)
+                    kl = torch.tensor(0.0)
+                    loss = recon
 
                 loss.backward()
                 optimizer.step()
@@ -157,7 +163,11 @@ def train(
             # --- Validation ---
             if val_loader:
                 val_loss = validation_loss(
-                    model, val_loader, device=device, scale_fac=scale_fac
+                    model,
+                    val_loader,
+                    device=device,
+                    scale_fac=scale_fac,
+                    variational=variational,
                 )
                 val_loss_list.append(val_loss)
                 if scheduler:
@@ -257,6 +267,7 @@ def predict(
     print_stats=True,
     n=5,
     tqdm_enabled=True,
+    variational=True,
 ):
     if weights is not None:
         model.load_state_dict(weights)
@@ -277,7 +288,8 @@ def predict(
                 target_gpu = target.to(device, non_blocking=True)
 
                 out = model(inp_gpu)
-                out = out[0]
+                if not variational:
+                    out = out[0]
 
                 # Append GPU tensors
                 targets_all.append(target_gpu)

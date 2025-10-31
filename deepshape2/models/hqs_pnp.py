@@ -49,7 +49,8 @@ class HQS_PnP(nn.Module):
         One HQS iteration step using FFT-domain inversion.
         """
         numerator = fpsf.conj() * fft2(dirty) + alpha * fft2(z)
-        denominator = (fpsf.conj() * fpsf).real + alpha
+        denominator = (fpsf.conj() * fpsf).real
+        denominator = denominator + alpha
         x_fft = numerator / denominator
         x = ifft2(x_fft).real
         return x
@@ -65,7 +66,7 @@ class HQS_PnP(nn.Module):
 
         z = dirty.clone().detach()
 
-        with torch.inference_mode(), torch.amp.autocast("cuda", dtype=torch.float32):
+        with torch.inference_mode():
             for alpha, sigma in zip(self.alpha_k, self.sigma_k):
                 x = self.iteration_step(z, dirty, fpsf, alpha)
                 x = self.unpad_image(x)

@@ -70,7 +70,7 @@ class VAE(nn.Module):
         activation="relu",
         bias=True,
         attention=True,
-        encoder_only=False,
+        variational=True,
     ):
         super().__init__()
 
@@ -88,7 +88,7 @@ class VAE(nn.Module):
             self.activation = nn.Sigmoid()
         self.bias = bias
         self.attention = attention
-        self.encoder_only = encoder_only
+        self.variational = variational
 
         # Encoder
         self.encoder = nn.Sequential(
@@ -161,84 +161,84 @@ class VAE(nn.Module):
             nn.PReLU(),
         )
 
-        # Reparameterization trick
-        self.mu = nn.Linear(self.latent_dim_1, self.latent_dim)
-        self.logvar = nn.Linear(self.latent_dim_1, self.latent_dim)
+        # Only used if variational=True
+        if self.variational:
+            self.mu = nn.Linear(self.latent_dim_1, self.latent_dim)
+            self.logvar = nn.Linear(self.latent_dim_1, self.latent_dim)
+        else:
+            self.latent = nn.Linear(self.latent_dim_1, self.latent_dim)
 
         # Decoder
-        if not self.encoder_only:
-            self.decoder = nn.Sequential(
-                nn.Linear(self.latent_dim, self.latent_dim_1),
-                nn.BatchNorm1d(self.latent_dim_1),
-                nn.PReLU(),
-                nn.Linear(self.latent_dim_1, 32 * self.channels * 4 * 4),
-                nn.PReLU(),
-                nn.Unflatten(dim=1, unflattened_size=(32 * self.channels, 4, 4)),
-                # (4, 4) → (8, 8)
-                nn.ConvTranspose2d(
-                    32 * self.channels,
-                    16 * self.channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=self.bias,
-                ),
-                MultiHeadSelfAttention2D(16 * self.channels)
-                if self.attention
-                else nn.Identity(),
-                nn.PReLU(),
-                # (8, 8) → (16, 16)
-                nn.ConvTranspose2d(
-                    16 * self.channels,
-                    8 * self.channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=self.bias,
-                ),
-                # SelfAttention2D(8 * self.channels) if self.attention else nn.Identity(),
-                nn.PReLU(),
-                # (16, 16) → (32, 32)
-                nn.ConvTranspose2d(
-                    8 * self.channels,
-                    4 * self.channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=self.bias,
-                ),
-                # SelfAttention2D(4 * self.channels) if self.attention else nn.Identity(),
-                nn.PReLU(),
-                # (32, 32) → (64, 64)
-                nn.ConvTranspose2d(
-                    4 * self.channels,
-                    2 * self.channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=self.bias,
-                ),
-                # SelfAttention2D(2 * self.channels) if self.attention else nn.Identity(),
-                nn.PReLU(),
-                # (64, 64) → (128, 128)
-                nn.ConvTranspose2d(
-                    2 * self.channels,
-                    self.channels,
-                    kernel_size=4,
-                    stride=2,
-                    padding=1,
-                    bias=self.bias,
-                ),
-                # SelfAttention2D(self.channels) if self.attention else nn.Identity(),
-                nn.PReLU(),
-                # Final output: (128, 128)
-                nn.ConvTranspose2d(
-                    self.channels, 1, kernel_size=3, padding=1, bias=self.bias
-                ),
-                self.activation,
-            )
-        else:
-            self.decoder = None
+        self.decoder = nn.Sequential(
+            nn.Linear(self.latent_dim, self.latent_dim_1),
+            nn.BatchNorm1d(self.latent_dim_1),
+            nn.PReLU(),
+            nn.Linear(self.latent_dim_1, 32 * self.channels * 4 * 4),
+            nn.PReLU(),
+            nn.Unflatten(dim=1, unflattened_size=(32 * self.channels, 4, 4)),
+            # (4, 4) → (8, 8)
+            nn.ConvTranspose2d(
+                32 * self.channels,
+                16 * self.channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                bias=self.bias,
+            ),
+            MultiHeadSelfAttention2D(16 * self.channels)
+            if self.attention
+            else nn.Identity(),
+            nn.PReLU(),
+            # (8, 8) → (16, 16)
+            nn.ConvTranspose2d(
+                16 * self.channels,
+                8 * self.channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                bias=self.bias,
+            ),
+            # SelfAttention2D(8 * self.channels) if self.attention else nn.Identity(),
+            nn.PReLU(),
+            # (16, 16) → (32, 32)
+            nn.ConvTranspose2d(
+                8 * self.channels,
+                4 * self.channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                bias=self.bias,
+            ),
+            # SelfAttention2D(4 * self.channels) if self.attention else nn.Identity(),
+            nn.PReLU(),
+            # (32, 32) → (64, 64)
+            nn.ConvTranspose2d(
+                4 * self.channels,
+                2 * self.channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                bias=self.bias,
+            ),
+            # SelfAttention2D(2 * self.channels) if self.attention else nn.Identity(),
+            nn.PReLU(),
+            # (64, 64) → (128, 128)
+            nn.ConvTranspose2d(
+                2 * self.channels,
+                self.channels,
+                kernel_size=4,
+                stride=2,
+                padding=1,
+                bias=self.bias,
+            ),
+            # SelfAttention2D(self.channels) if self.attention else nn.Identity(),
+            nn.PReLU(),
+            # Final output: (128, 128)
+            nn.ConvTranspose2d(
+                self.channels, 1, kernel_size=3, padding=1, bias=self.bias
+            ),
+            self.activation,
+        )
 
     def reparameterize(self, z):
         mu = self.mu(z)
@@ -252,13 +252,15 @@ class VAE(nn.Module):
 
     def forward(self, x):
         z1 = self.encoder(x)
-        z, mu, logvar = self.reparameterize(z1)
 
-        if self.encoder_only:
-            return z, mu, logvar
+        if self.variational:
+            z, mu, logvar = self.reparameterize(z1)
+        else:
+            z = self.latent(z1)
 
         xhat = self.decoder(z)
-        return xhat, mu, logvar
-        return xhat, mu, logvar
-        return xhat, mu, logvar
-        return xhat, mu, logvar
+
+        if self.variational:
+            return xhat, mu, logvar
+        else:
+            return xhat

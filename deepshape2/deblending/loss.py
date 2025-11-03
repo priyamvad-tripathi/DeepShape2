@@ -37,7 +37,7 @@ def vae_loss(target, recon, mu, logvar, beta, device, alpha=0.7, mask=None):
     return total_loss, recon_loss, kl_loss
 
 
-def validation_loss(model, val_loader, device, scale_fac, variational=True):
+def validation_loss(model, val_loader, device, scale_fac):
     model.eval()
     val_loss_all = []
 
@@ -48,8 +48,8 @@ def validation_loss(model, val_loader, device, scale_fac, variational=True):
 
             out = model(inp)
 
-            if variational:
-                out = out[0]
+            if isinstance(out, (tuple, list)):
+                out = out[0]  # Get reconstructed output
 
             # Scale images
             target_sc = torch.sinh(target) / scale_fac

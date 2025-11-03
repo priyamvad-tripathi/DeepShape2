@@ -60,7 +60,6 @@ def train(
     precision = kwargs.get("precision", 4)
     tqdm_enabled = kwargs.get("tqdm_enabled", True)
     tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
-    variational = kwargs.get("variational", True)
 
     scheduler = None
     if scheduler_params:
@@ -114,7 +113,7 @@ def train(
 
                 optimizer.zero_grad(set_to_none=True)
                 out = model(inp)
-                if variational:
+                if isinstance(out, (tuple, list)):
                     loss, recon, kl = vae_loss(target, *out, beta=beta, device=device)
                 else:
                     recon = torch.nn.functional.mse_loss(out, target)
@@ -168,7 +167,6 @@ def train(
                     val_loader,
                     device=device,
                     scale_fac=scale_fac,
-                    variational=variational,
                 )
                 val_loss_list.append(val_loss)
                 if scheduler:

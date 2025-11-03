@@ -13,7 +13,7 @@ from deepshape2.utils import load_config, set_seed
 # Seeds to ensure reproducibility
 set_seed()
 cfg = load_config()
-scale_fac = cfg["scale_fac"]
+SCALE_FACTOR = cfg["SCALE_FACTOR"]
 # %% Deblending Loader
 
 
@@ -47,7 +47,7 @@ class BlendDataset(Dataset):
         x_key: str,
         y_key: str,
         groups=None,
-        scale_fac: float = scale_fac,
+        scale_fac: float = SCALE_FACTOR,
         min_max: bool = False,
         tanh: bool = False,
         arcsin: bool = True,

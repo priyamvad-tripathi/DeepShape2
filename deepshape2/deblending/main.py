@@ -25,7 +25,7 @@ tqdm_kwargs = get_tqdm()
 
 __all__ = ["train", "predict", "plot_bad_cases", "predict_multiple"]
 
-scale_fac = load_config().get("scale_fac", 5e7)
+SCALE_FACTOR = load_config().get("SCALE_FACTOR", 5e7)
 
 
 # %% Training Function
@@ -86,7 +86,7 @@ def train(
     except (AttributeError, FileNotFoundError, TypeError):
         print("No saved checkpoints found. Starting from scratch.")
 
-    scale_fac = getattr(train_loader.dataset, "scale_fac", 1.0)
+    scale_fac = getattr(train_loader.dataset, "scale_fac", SCALE_FACTOR)
 
     # --- Training loop ---
     for epoch in range(epochs):
@@ -262,7 +262,7 @@ def predict(
     weights,
     val_loader,
     device,
-    scale_fac=scale_fac,
+    scale_fac=SCALE_FACTOR,
     print_stats=True,
     n=5,
     tqdm_enabled=True,
@@ -361,7 +361,6 @@ def predict(
 # %% Plotting Function
 def plot_bad_cases(
     metrics,
-    scale_fac=scale_fac,
     names=["PSNR", "SSIM"],
     n=5,
 ):
@@ -407,93 +406,104 @@ def plot_bad_cases(
 def predict_multiple(
     models,
     ckpts,
-    val_loader,
+    test_loader,
     device,
-    scale_fac,
     model_names=None,
     print_stats=True,
 ):
     """
     Predict with multiple models on the same dataloader in one pass.
+    Each batch is processed by all models before moving to the next batch.
+    Inputs and targets are stored once, while outputs and metrics are per-model.
 
     Args:
         models (list): List of PyTorch models.
         ckpts (list): List of checkpoint file paths (same order as models).
-        val_loader (DataLoader): DataLoader for test/validation set.
+        test_loader (DataLoader): DataLoader for test/validation set.
         device (torch.device): Device to run inference on.
         scale_fac (float): Scaling factor for sinh transform.
         model_names (list[str], optional): Names for models; if None -> model_1, model_2, ...
         print_stats (bool): Whether to print summary metrics.
 
     Returns:
-        dict: {model_name: metrics_dict}
+        dict: {
+            "targets": np.ndarray,
+            "inputs": np.ndarray,
+            "blend": np.ndarray,
+            model_name: { "output", "psnr_out", "ssim_out" },
+            ...
+        }
     """
     assert len(models) == len(ckpts), "Each model must have a corresponding checkpoint"
+
+    scale_fac = getattr(test_loader.dataset, "scale_fac", SCALE_FACTOR)
 
     # Assign default names
     if model_names is None:
         model_names = [f"model_{i + 1}" for i in range(len(models))]
 
-    # Load weights & move to device
+    # Load weights & move models to device
     for model, ckp in zip(models, ckpts):
         state = torch.load(ckp, map_location=device, weights_only=False)
         model.load_state_dict(state["best_weights"])
         model.to(device)
         model.eval()
 
-    # Initialize accumulators per model
-    results = {
-        name: {
-            "targets": [],
-            "inputs": [],
-            "outputs": [],
-            "psnr": [],
-        }
-        for name in model_names
-    }
+    # Shared accumulators
+    targets_all, inputs_all = [], []
+
+    # Per-model accumulators
+    model_results = {name: {"outputs": [], "psnr": []} for name in model_names}
 
     # Single dataloader loop
     with torch.inference_mode():
-        pbar = get_progress_bar(True, total=len(val_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(True, total=len(test_loader), **tqdm_kwargs)
         with pbar:
-            for inp, target in pbar:
+            for inp, target in test_loader:
                 pbar.update(1)
+
                 inp_gpu = inp.to(device, non_blocking=True)
                 target_gpu = target.to(device, non_blocking=True)
 
-                # Precompute scaled tensors for PSNR comparison
+                # Store shared tensors
+                targets_all.append(target_gpu)
+                inputs_all.append(inp_gpu)
+
+                # Precompute scaled targets for PSNR
                 target_sc = torch.sinh(target_gpu) / scale_fac
 
-                # Run all models on this batch
+                # Run all models on the same batch
                 for model, name in zip(models, model_names):
                     out = model(inp_gpu)
                     if isinstance(out, (tuple, list)):
                         out = out[0]
 
-                    # Store tensors
-                    results[name]["targets"].append(target_gpu)
-                    results[name]["inputs"].append(inp_gpu)
-                    results[name]["outputs"].append(out)
-
-                    # Scale for PSNR
+                    # Store model-specific outputs and metrics
+                    model_results[name]["outputs"].append(out)
                     out_sc = torch.sinh(out) / scale_fac
                     psnr_batch = psnr_torch(target_sc, out_sc)
-                    results[name]["psnr"].append(psnr_batch)
+                    model_results[name]["psnr"].append(psnr_batch)
 
-    # Post-processing (CPU transfer, SSIM, etc.)
+    # Move shared arrays to CPU once
+    targets_all = np.sinh(torch.cat(targets_all).cpu().numpy().squeeze()) / scale_fac
+    inputs_all = np.sinh(torch.cat(inputs_all).cpu().numpy().squeeze()) / scale_fac
+    blend = blendedness(targets_all, inputs_all)
+
+    # Post-process per model
+    results = {
+        "targets": targets_all,
+        "inputs": inputs_all,
+        "blend": blend,
+    }
+
     for name in model_names:
-        r = results[name]
+        r = model_results[name]
 
-        targets_all = (
-            np.sinh(torch.cat(r["targets"]).cpu().numpy().squeeze()) / scale_fac
-        )
         outputs_all = (
             np.sinh(torch.cat(r["outputs"]).cpu().numpy().squeeze()) / scale_fac
         )
-        inputs_all = np.sinh(torch.cat(r["inputs"]).cpu().numpy().squeeze()) / scale_fac
         psnr_out = torch.cat(r["psnr"]).cpu().numpy()
         ssim_out = ssim_batch(targets_all, outputs_all)
-        blend = blendedness(targets_all, inputs_all)
 
         if print_stats:
             print(f"\nModel: {name}")
@@ -504,14 +514,10 @@ def predict_multiple(
                 f"PSNR → Max: {np.max(psnr_out):.03f} dB | Min: {np.min(psnr_out):.03f} dB | Mean: {np.mean(psnr_out):.03f} dB"
             )
 
-        # Replace raw tensors with final arrays
         results[name] = {
+            "output": outputs_all,
             "psnr_out": psnr_out,
             "ssim_out": ssim_out,
-            "targets": targets_all,
-            "output": outputs_all,
-            "input": inputs_all,
-            "blend": blend,
         }
 
     return results

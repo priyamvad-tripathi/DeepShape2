@@ -2,4 +2,4 @@
 """Deblending module for DeepShape2 package."""
 
 from .loss import *
-from .training import *
+from .main import *

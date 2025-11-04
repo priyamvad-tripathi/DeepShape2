@@ -157,42 +157,76 @@ def process_stamp(stamp, NPIX):
 # %% Shape measurement functions
 
 
-def shape_galsim(image, NPIX=128):
-    """
-    Predict the shape of a galaxy using adaptive moments.
+def _shape_galsim_single(image: np.ndarray):
+    """Compute ellipticity and moments status for a single 2D galaxy image using GalSim."""
 
-    Parameters:
-    ----------
-    image (numpy.ndarray): The input image array containing the galaxy.
-    NPIX (int, optional): The size of the image in pixels. Default is 128.
-
-    Returns:
-    tuple: A tuple containing:
-        - g (numpy.ndarray): An array with two elements representing the ellipticity components (g1, g2).
-        - moments_status (int): The status of the moments calculation (0 if successful, non-zero otherwise).
-
-    Notes:
-    This function uses the GalSim library to estimate the adaptive moments of the input image.
-    If the initial moments estimation fails, it retries with modified parameters.
-    """
-
-    im_size = NPIX
-    # create a galsim version of the data
+    NPIX = image.shape[0]
     image_galsim = galsim.Image(image)
-    # estimate the moments of the observation image
-    shape = galsim.hsm.FindAdaptiveMom(
-        image_galsim,
-        guess_centroid=galsim.PositionD(im_size // 2, im_size // 2),
-        strict=False,
-    )
-    if shape.error_message:
+    try:
+        shape = galsim.hsm.FindAdaptiveMom(
+            image_galsim,
+            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
+            strict=False,
+        )
+    except galsim.errors.GalSimHSMError:
+        # Retry with relaxed parameters if initial estimation fails
         new_params = galsim.hsm.HSMParams(
             max_mom2_iter=2000, convergence_threshold=0.1, bound_correct_wt=2.0
         )
-        shape = image_galsim.FindAdaptiveMom(strict=False, hsmparams=new_params)
-    g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
+        shape = galsim.hsm.FindAdaptiveMom(
+            image_galsim,
+            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
+            strict=False,
+            hsmparams=new_params,
+        )
 
+    g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
     return g, shape.moments_status
+
+
+def shape_galsim(images):
+    """
+    Compute galaxy shapes using GalSim adaptive moments.
+
+    Parameters
+    ----------
+    images : numpy.ndarray
+        Input image or array of images.
+    Returns
+    -------
+    g : numpy.ndarray
+        Ellipticity components:
+            - Shape (2,) for a single image
+            - Shape (N, 2) for a batch
+    status : numpy.ndarray or int
+        Moment status code(s):
+            - int for a single image
+            - shape (N,) for a batch
+    """
+    if images.ndim > 3:
+        images = np.squeeze(images)
+
+    # Handle single image
+    if images.ndim == 2:
+        return _shape_galsim_single(images)
+
+    # Handle batch of images
+    elif images.ndim == 3:
+        n_images = images.shape[0]
+        g_all = np.zeros((n_images, 2), dtype=float)
+        status_all = np.zeros(n_images, dtype=int)
+
+        for i in range(n_images):
+            g, status = _shape_galsim_single(images[i])
+            g_all[i] = g
+            status_all[i] = status
+
+        return g_all, status_all
+
+    else:
+        raise ValueError(
+            f"Invalid input shape {images.shape}. Expected 2D or 3D array (after squeezing)."
+        )
 
 
 def print_peak(img, title="Image"):

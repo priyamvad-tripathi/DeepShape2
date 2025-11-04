@@ -94,13 +94,11 @@ class VAE(nn.Module):
         self.encoder = nn.Sequential(
             # (128, 128)
             nn.Conv2d(1, self.channels, 3, padding=1, bias=self.bias),
-            # SelfAttention2D(self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             # (64, 64)
             nn.Conv2d(
                 self.channels, 2 * self.channels, 3, padding=1, stride=2, bias=self.bias
             ),
-            # SelfAttention2D(2 * self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             nn.Dropout(0.3),
             # (32, 32)
@@ -112,7 +110,6 @@ class VAE(nn.Module):
                 stride=2,
                 bias=self.bias,
             ),
-            # SelfAttention2D(4 * self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             # (16, 16)
             nn.Conv2d(
@@ -123,7 +120,6 @@ class VAE(nn.Module):
                 stride=2,
                 bias=self.bias,
             ),
-            # SelfAttention2D(8 * self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             nn.Dropout(0.3),
             # (8, 8)
@@ -148,7 +144,6 @@ class VAE(nn.Module):
                 stride=2,
                 bias=self.bias,
             ),
-            # SelfAttention2D(32 * self.channels) if self.attention else nn.Identity(),
             MultiHeadSelfAttention2D(32 * self.channels)
             if self.attention
             else nn.Identity(),
@@ -198,7 +193,9 @@ class VAE(nn.Module):
                 padding=1,
                 bias=self.bias,
             ),
-            # SelfAttention2D(8 * self.channels) if self.attention else nn.Identity(),
+            # MultiHeadSelfAttention2D(8 * self.channels)
+            # if self.attention
+            # else nn.Identity(),
             nn.PReLU(),
             # (16, 16) → (32, 32)
             nn.ConvTranspose2d(
@@ -209,7 +206,6 @@ class VAE(nn.Module):
                 padding=1,
                 bias=self.bias,
             ),
-            # SelfAttention2D(4 * self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             # (32, 32) → (64, 64)
             nn.ConvTranspose2d(
@@ -220,7 +216,6 @@ class VAE(nn.Module):
                 padding=1,
                 bias=self.bias,
             ),
-            # SelfAttention2D(2 * self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             # (64, 64) → (128, 128)
             nn.ConvTranspose2d(
@@ -231,7 +226,6 @@ class VAE(nn.Module):
                 padding=1,
                 bias=self.bias,
             ),
-            # SelfAttention2D(self.channels) if self.attention else nn.Identity(),
             nn.PReLU(),
             # Final output: (128, 128)
             nn.ConvTranspose2d(

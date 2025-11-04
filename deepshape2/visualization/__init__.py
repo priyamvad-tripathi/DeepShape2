@@ -2,4 +2,5 @@
 """Visualization functions for DeepShape2 package."""
 
 from .base import *
+from .metrics import *
 from .table import *

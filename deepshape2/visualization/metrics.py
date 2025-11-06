@@ -36,6 +36,9 @@ def probability_distribution_metric(
     labels = []
 
     for metric, model_name, color in zip(metric_list, model_names, colors):
+        metric = np.asarray(metric)
+        metric = metric[~np.isnan(metric)]
+
         # Compute statistics
         median_val = np.median(metric)
         lower_q = np.percentile(metric, shade_percentile[0])
@@ -98,102 +101,168 @@ def probability_distribution_metric(
 # %%
 def binned_boxplot(
     stat_values,
-    metric_list,
+    metric_matrix,
     model_names=["VAE-MHA", "VAE-CNN", "CAT"],
-    n_bins=5,
-    metric_name="PSNR",
-    stat_name="Flux",
+    metric_names=(r"$\Delta \epsilon \,[\times 100]$", "PSNR"),
+    stat_name=r"Flux $[\mu\mathrm{Jy}]$",
+    bin_edges=None,
     fname=None,
-    bottom_y_label="Density",
+    legend=False,
+    logx=False,
 ):
     """
     Plots binned boxplots of metrics per model and a KDE of the binning variable.
-
-    Parameters
-    ----------
-    stat_values : np.ndarray
-        1D array of the statistic to bin (length N_galaxies).
-    metric_list : list of np.ndarray
-        List of 1D arrays (length N_galaxies) of metrics for each model.
-    model_names : list of str
-        Names of the models.
-    n_bins : int
-        Number of bins for the statistic.
-    metric_name : str
-        Label for metric y-axis.
-    stat_name : str
-        Label for statistic x-axis.
-    fname : str or None
-        If provided, save figure to this file.
+    Works with metric_matrix shaped (n_metrics, n_models, N_galaxies).
     """
-    if model_names is None:
-        model_names = [f"Model {i + 1}" for i in range(len(metric_list))]
 
+    n_metrics, n_models, n_galaxies = metric_matrix.shape
+
+    # -----------------------------
     # Compute bin edges and centers
-    bin_edges = np.linspace(stat_values.min(), stat_values.max(), n_bins + 1)
+    # -----------------------------
+    bin_edges = np.asarray(bin_edges)
+    n_bins = len(bin_edges) - 1
     bin_centers = 0.5 * (bin_edges[:-1] + bin_edges[1:])
 
-    fig, (ax_top, ax_bottom) = plt.subplots(
-        2, 1, figsize=(6, 4.2), sharex=True, gridspec_kw={"height_ratios": [3, 1]}
+    # -----------------------------
+    # Figure and axes
+    # -----------------------------l
+    fig, axes = plt.subplots(
+        n_metrics + 1,
+        1,
+        figsize=(6, 7),
+        sharex=True,
+        gridspec_kw={"height_ratios": [3] * n_metrics + [1], "hspace": 0},
     )
 
-    # Colors
-    colors = sns.color_palette("tab10", n_colors=len(metric_list))
+    ax_boxes = axes[:-1]
+    ax_kde = axes[-1]
 
-    # Small offset for each model within a bin
-    total_width = 0.4 * (bin_edges[1] - bin_edges[0])
-    width = total_width / len(metric_list)
-    offsets = np.linspace(
-        -total_width / 2 + width / 2, total_width / 2 - width / 2, len(metric_list)
-    )
+    # -----------------------------
+    # Set axis scale
+    # -----------------------------
+    if logx:
+        stat_min = max(1e-2, stat_values.min())
+        stat_max = stat_values.max()
+        for ax in axes:
+            ax.set_xscale("log")
+            ax.set_xlim(stat_min, stat_max)
+    else:
+        for ax in axes:
+            ax.set_xscale("linear")
+            ax.set_xlim(stat_values.min(), stat_values.max())
 
-    for i, (metric, model_name, color, offset) in enumerate(
-        zip(metric_list, model_names, colors, offsets)
-    ):
-        binned_metrics = []
-        positions = []
-        for j in range(n_bins):
-            mask = (stat_values >= bin_edges[j]) & (stat_values < bin_edges[j + 1])
-            binned_metrics.append(metric[mask])
-            positions.append(bin_centers[j] + offset)
+    fig.canvas.draw()
 
-        # Boxplot without outliers, small width
-        bp = ax_top.boxplot(
-            binned_metrics,
-            positions=positions,
-            widths=width * 0.8,
-            patch_artist=True,
-            showfliers=False,
-            medianprops=dict(color=color, linewidth=2),
-            boxprops=dict(facecolor=color, alpha=0.4),
+    # -----------------------------
+    # Width and separation in physical units
+    # -----------------------------
+    width_cm = 0.35  # box width on paper
+    sep_cm = 0.42  # separation between boxes
+    fig_width_in = fig.get_size_inches()[0]
+    bbox = ax_boxes[0].get_position()
+    axis_width_in = fig_width_in * bbox.width
+    width_frac = (width_cm / 2.54) / axis_width_in
+    sep_frac = (sep_cm / 2.54) / axis_width_in
+
+    x0, x1 = ax_boxes[0].get_xlim()
+
+    if not logx:
+        data_span = x1 - x0
+        widths_per_bin = [width_frac * data_span] * n_bins
+        sep_data = sep_frac * data_span
+    else:
+        trans = ax_boxes[0].transData
+        inv = ax_boxes[0].transData.inverted()
+        widths_per_bin = []
+        for c in bin_centers:
+            cx_disp = trans.transform((c, 0))[0]
+            left_disp = cx_disp - (width_frac * axis_width_in * fig.dpi) / 2
+            right_disp = cx_disp + (width_frac * axis_width_in * fig.dpi) / 2
+            x_left = inv.transform((left_disp, 0))[0]
+            x_right = inv.transform((right_disp, 0))[0]
+            widths_per_bin.append(x_right - x_left)
+        sep_data = 10 ** (sep_frac * (np.log10(x1) - np.log10(x0)))
+
+    # -----------------------------
+    # Draw boxplots for each metric
+    # -----------------------------
+    for ax, metric_idx, metric_name in zip(ax_boxes, range(n_metrics), metric_names):
+        for model_idx, (model_name, color) in enumerate(zip(model_names, colors)):
+            binned_metrics = []
+            positions = []
+            shift_index = model_idx - (n_models - 1) / 2  # symmetric shift
+            for j, center in enumerate(bin_centers):
+                mask = (stat_values >= bin_edges[j]) & (stat_values < bin_edges[j + 1])
+                stat_in_bin = stat_values[mask]
+                metric_in_bin = metric_matrix[metric_idx, model_idx, mask]
+
+                # Remove NaNs in metric, keeping corresponding stat
+                valid = ~np.isnan(metric_in_bin)
+                stat_in_bin = stat_in_bin[valid]
+                metric_in_bin = metric_in_bin[valid]
+
+                binned_metrics.append(metric_in_bin)
+
+                if not logx:
+                    pos = center + shift_index * sep_data
+                else:
+                    pos = center * (sep_data**shift_index)
+                positions.append(pos)
+
+            ax.boxplot(
+                binned_metrics,
+                positions=positions,
+                widths=widths_per_bin,
+                patch_artist=True,
+                showfliers=False,
+                medianprops=dict(color=color, linewidth=2),
+                boxprops=dict(facecolor=color, edgecolor=color, alpha=fill_alpha),
+                whiskerprops=dict(color=color, alpha=0.8, linewidth=1.5),
+                capprops=dict(color=color, alpha=0.8, linewidth=1.5),
+            )
+
+        ax.set_ylabel(metric_name)
+        ax.tick_params(
+            axis="x", which="both", bottom=False, top=False, labelbottom=False
         )
+        if legend and metric_idx == 0:
+            handles = [
+                mpatches.Patch(
+                    facecolor=color, edgecolor=color, label=name, alpha=fill_alpha
+                )
+                for color, name in zip(colors, model_names)
+            ]
+            ax.legend(handles=handles, frameon=False)
 
-        for patch in bp["boxes"]:
-            patch.set_edgecolor(color)
-            patch.set_linewidth(1.5)
-
-    ax_top.set_ylabel(metric_name)
-    ax_top.grid(True, linestyle="--", alpha=0.5)
-
-    # Add legend manually
-    for color, model_name in zip(colors, model_names):
-        ax_top.plot([], [], color=color, label=model_name, linewidth=6)
-    ax_top.legend(loc="upper right")
-
+    # -----------------------------
     # Bottom: KDE of the statistic
+    # -----------------------------
     kde = gaussian_kde(stat_values)
     x_vals = np.linspace(stat_values.min(), stat_values.max(), 500)
     y_vals = kde(x_vals)
-    y_vals /= y_vals.max()  # normalize for plotting
-    ax_bottom.fill_between(x_vals, y_vals, alpha=0.3, color="gray")
-    ax_bottom.plot(x_vals, y_vals, color="black", linewidth=1.5)
-    ax_bottom.set_xlabel(stat_name)
-    ax_bottom.set_ylabel(bottom_y_label)
-    ax_bottom.grid(True, linestyle="--", alpha=0.5)
-    ax_bottom.set_ylim(bottom=0)
+    ax_kde.fill_between(x_vals, y_vals, alpha=0.3, color="gray")
+    ax_kde.plot(x_vals, y_vals, color="black", linewidth=1, alpha=0.8)
+    ax_kde.set_xlabel(stat_name)
+    ax_kde.set_ylabel("Arbitrary")
+    ax_kde.set_yscale("log")
+    ax_kde.set_ylim(bottom=1e-4)
+    ax_kde.minorticks_off()
 
-    # Set x-ticks at bin centers
-    ax_bottom.set_xticks(bin_centers)
-    ax_bottom.set_xticklabels([f"{int(c)}" for c in bin_centers])
+    # -----------------------------
+    # Tick styling for log axis
+    # -----------------------------
+    if logx:
+        stat_max = np.max(stat_values)
+        major_ticks = [1e-2, 1e-1, stat_max * 1.04]
+        ax_kde.set_xticks(major_ticks)
+        ax_kde.set_xticklabels([r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$"])
+        ax_kde.minorticks_off()
+    else:
+        ax_kde.set_xscale("linear")
+        ax_kde.set_xlim(left=10, right=200)
+        ax_kde.set_xticks(bin_edges)
+        ax_kde.set_xticklabels([f"{int(e)}" for e in bin_edges])
 
+    # Save figure
     savefig(fname)

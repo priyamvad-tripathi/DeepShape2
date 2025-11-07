@@ -15,6 +15,7 @@ from deepshape2.utils import (
     load_config,
     psnr_torch,
     save_ckp,
+    shape_galsim,
     ssim_batch,
     time_string,
 )
@@ -377,7 +378,7 @@ def plot_bad_cases(
     for stat, name in zip(stats, names):
         ind = np.argsort(stat)[:n]
 
-        tit_in = [f"{bl:.3f}" for bl in blend[:n]]
+        tit_in = [f"{bl:.3f}" for bl in blend[ind]]
         tit_out = [
             f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[ind], psnr_out[ind])
         ]
@@ -410,6 +411,8 @@ def predict_multiple(
     device,
     model_names=None,
     print_stats=True,
+    measure_shape=True,
+    do_SSIM=False,
 ):
     """
     Predict with multiple models on the same dataloader in one pass.
@@ -496,28 +499,46 @@ def predict_multiple(
         "blend": blend,
     }
 
+    if measure_shape:
+        shape_true, status_true = shape_galsim(targets_all)
+        results["shape_true"] = shape_true
+        results["status_true"] = status_true
+
     for name in model_names:
         r = model_results[name]
 
         outputs_all = (
             np.sinh(torch.cat(r["outputs"]).cpu().numpy().squeeze()) / scale_fac
         )
-        psnr_out = torch.cat(r["psnr"]).cpu().numpy()
-        ssim_out = ssim_batch(targets_all, outputs_all)
+        psnr = torch.cat(r["psnr"]).cpu().numpy()
+        if do_SSIM:
+            ssim = ssim_batch(targets_all, outputs_all)
+        else:
+            ssim = None
 
         if print_stats:
             print(f"\nModel: {name}")
             print(
-                f"SSIM → Max: {np.max(ssim_out):.03f} | Min: {np.min(ssim_out):.03f} | Mean: {np.mean(ssim_out):.03f}"
+                f"PSNR → Max: {np.max(psnr):.03f} dB | Min: {np.min(psnr):.03f} dB | Mean: {np.mean(psnr):.03f} dB"
             )
-            print(
-                f"PSNR → Max: {np.max(psnr_out):.03f} dB | Min: {np.min(psnr_out):.03f} dB | Mean: {np.mean(psnr_out):.03f} dB"
-            )
+            if do_SSIM:
+                print(
+                    f"SSIM → Max: {np.max(ssim):.03f} | Min: {np.min(ssim):.03f} | Mean: {np.mean(ssim):.03f}"
+                )
 
         results[name] = {
             "output": outputs_all,
-            "psnr_out": psnr_out,
-            "ssim_out": ssim_out,
+            "psnr": psnr,
+            "ssim": ssim,
         }
+        if measure_shape:
+            shape_recon, status_recon = shape_galsim(outputs_all)
+            results[name]["shape"] = shape_recon
+            results[name]["status"] = status_recon
+
+            shape_diff = np.linalg.norm(shape_recon - shape_true, axis=1)
+            print(
+                f"Shape Difference → Max: {np.max(shape_diff):.03f} | Min: {np.min(shape_diff):.03f} | Mean: {np.mean(shape_diff):.03f}"
+            )
 
     return results

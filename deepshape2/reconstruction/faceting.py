@@ -5,37 +5,24 @@ import warnings
 
 import numpy as np
 import pandas as pd
-import torch
 import xarray
 from dask import compute, delayed
 from dask.distributed import Client, LocalCluster
 from ska_sdp_datamodels.visibility import create_visibility_from_ms
 from ska_sdp_func_python.visibility import subtract_visibility
-from torch.utils.data import DataLoader, TensorDataset
 
-from deepshape2.models import create_model
 from deepshape2.simulation import (
     make_dirty_image_and_psf,
     predict_visibilities_from_array,
     rephase_visibility,
 )
-from deepshape2.utils import (
-    extract_image,
-    get_progress_bar,
-    get_tqdm,
-    load_config,
-    load_h5,
-    post_step,
-)
+from deepshape2.utils import extract_image, load_config, load_h5, post_step
 
 # Disable warnings and logging from external libraries
 warnings.warn = lambda *args, **kwargs: None
 logging.getLogger().addHandler(logging.NullHandler())
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
-
-# TQDM settings
-tqdm_kwargs = get_tqdm()
 
 
 # %% Functions
@@ -87,61 +74,6 @@ def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=Non
         )
 
     return np.concatenate(dirty_all), np.concatenate(psf_all)
-
-
-def reconstruct_facets(
-    dirty_all, psf_all, device, hqs_params={}, bsize=64, num_workers=4
-):
-    """
-    Reconstruct all facets using HQS-PnP model in batches.
-
-    Args:
-        dirty_all: np.ndarray, shape (N, H, W)
-        psf_all: np.ndarray, shape (N, H, W)
-        device: torch.device
-        hqs_params: dict, arguments for create_model
-        bsize: batch size
-        num_workers: number of DataLoader workers
-    Returns:
-        recon_all: np.ndarray, shape (N, H, W)
-    """
-    # --- Create model once
-    model = create_model(device=device, **hqs_params)
-    model.eval()
-
-    # --- Stack dirty + PSF as channels (C=2)
-    im_all = np.stack([dirty_all, psf_all], axis=1)  # shape: (N, 2, H, W)
-    im_tensor = torch.tensor(im_all, dtype=torch.float32, pin_memory=True)
-
-    # --- DataLoader for batch processing
-    dataset = TensorDataset(im_tensor)
-    loader = DataLoader(
-        dataset,
-        batch_size=bsize,
-        shuffle=False,
-        pin_memory=True,
-        num_workers=num_workers,
-    )
-
-    # --- Preallocate output array
-    N, _, H, W = im_all.shape
-    recon_all = np.empty((N, H, W), dtype=np.float32)
-
-    # --- Batch reconstruction with progress bar
-    idx_start = 0
-    with torch.inference_mode():
-        pbar = get_progress_bar(True, total=len(loader), **tqdm_kwargs)
-        pbar.set_description("Reconstructing facets")
-        for batch in loader:
-            im = batch[0].to(device, non_blocking=True)
-            recon = model(im).cpu().numpy().squeeze()
-            B = recon.shape[0]
-
-            recon_all[idx_start : idx_start + B] = recon
-            idx_start += B
-            pbar.update(1)
-        pbar.close()
-    return recon_all
 
 
 def residual_facet_image(

@@ -6,23 +6,22 @@ from torch.utils.data import DataLoader
 from deepshape2.data import loaders
 from deepshape2.deblending import plot_bad_cases, predict, train
 from deepshape2.models import VAE
-from deepshape2.utils import load_config, set_seed
+from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_losses
 
 # %% Set default parameters
 cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
-beta = 0.01
+beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_deblender_high_beta.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_mha.pt"
 
-scale_fac = cfg["scale_fac"]
+SCALE_FACTOR = cfg["SCALE_FACTOR"]
 
 # Torch Parameters
-# device = get_freest_gpu(set_device=True)
-device = torch.device("cuda:1")
+device = get_freest_gpu(set_device=True)
 set_seed()
 
 # %% Load Data into loaders
@@ -38,7 +37,7 @@ train_dataset = loaders.BlendDataset(
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
-    scale_fac=scale_fac,
+    scale_fac=SCALE_FACTOR,
 )
 
 val_dataset = loaders.BlendDataset(
@@ -46,7 +45,7 @@ val_dataset = loaders.BlendDataset(
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
-    scale_fac=scale_fac,
+    scale_fac=SCALE_FACTOR,
 )
 
 # Initialize DataLoaders
@@ -73,7 +72,7 @@ model = VAE()
 model = model.to(device)
 
 # %% Train the model and plot results
-n_epochs = 121
+n_epochs = 251
 
 scheduler_params = {"factor": 0.5, "patience": 15, "min_lr": lr_init / (2**5)}
 
@@ -129,9 +128,8 @@ metrics = predict(
     best_weights,
     val_loader,
     device,
-    scale_fac=scale_fac,
+    scale_fac=SCALE_FACTOR,
 )
 
 # %% Plot the worst cases
-plot_bad_cases(metrics, category="input", scale_fac=scale_fac)
-plot_bad_cases(metrics, category="output", scale_fac=scale_fac)
+plot_bad_cases(metrics)

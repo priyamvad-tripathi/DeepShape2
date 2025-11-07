@@ -217,7 +217,7 @@ if __name__ == "__main__":
 
     # --- Load pre-trained deblender
     deblender = VAE().to(device)
-    ckpt_path = os.path.join(cfg["MODEL_DIR"], "vae_deblender.pt")
+    ckpt_path = os.path.join(cfg["MODEL_DIR"], "vae_mha.pt")
     deblender.load_state_dict(
         torch.load(ckpt_path, map_location=device, weights_only=False)["best_weights"]
     )

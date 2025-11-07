@@ -221,6 +221,7 @@ if __name__ == "__main__":
     deblender.load_state_dict(
         torch.load(ckpt_path, map_location=device, weights_only=False)["best_weights"]
     )
+    deblender.eval()
 
     # Dataset setup
     dirty_all = facet_data[f"wide/facets_{GRID_SIZE}/dirty"][:]

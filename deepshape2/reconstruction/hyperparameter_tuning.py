@@ -88,14 +88,15 @@ def objective(trial, device, val_loader_subset, deblender, crop_fn):
             # Deconvolution
             deconvolved = model(im)
             decon_crop = crop_fn(deconvolved)
-            iso_crop = crop_fn(isolated_stamp)
 
             # Deblend
             decon_scaled = torch.arcsinh_(decon_crop.mul_(SCALE_FAC))
             decon_deblended = deblender(decon_scaled)[0]
             recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
 
-            psnr_values.append(psnr_torch(recon, iso_crop.unsqueeze(1)).detach().cpu())
+            psnr_values.append(
+                psnr_torch(recon, isolated_stamp.unsqueeze(1)).detach().cpu()
+            )
 
     return -torch.cat(psnr_values).mean()
 
@@ -113,7 +114,7 @@ def evaluate_best_params(
 
     # Containers for metrics and outputs
     psnr_list, ssim_list = [], []
-    targets, inputs, outputs = [], [], []
+    targets, inputs, outputs, decon_all = [], [], [], []
 
     # Progress bar
     pbar = get_progress_bar(True, total=len(val_loader), **get_tqdm())
@@ -125,7 +126,8 @@ def evaluate_best_params(
 
             # --- Model inference ---
             decon = crop_fn(model(im))
-            iso_crop = crop_fn(iso)
+
+            decon_all.append(decon.squeeze(1).cpu())
 
             # --- Deblending ---
             decon_scaled = torch.arcsinh_(decon * SCALE_FAC)
@@ -134,7 +136,7 @@ def evaluate_best_params(
 
             # --- Move to CPU once ---
             recon_cpu = recon.squeeze(1).cpu()
-            iso_cpu = iso_crop.cpu()
+            iso_cpu = iso.cpu()
             inp_cpu = crop_fn(im[:, 0]).cpu()
 
             # --- Metrics ---
@@ -155,6 +157,7 @@ def evaluate_best_params(
     targets_all = torch.cat(targets).numpy()
     inputs_all = torch.cat(inputs).numpy()
     outputs_all = torch.cat(outputs).numpy()
+    decon_all = torch.cat(decon_all).numpy()
 
     # --- Report ---
     print(
@@ -175,12 +178,15 @@ def evaluate_best_params(
             images=[
                 targets_all[:n],
                 inputs_all[:n],
+                decon_all[:n],
                 outputs_all[:n],
                 targets_all[:n] - outputs_all[:n],
             ],
-            caption=["Target", "Input", "Recon", "Residual"],
+            caption=["Target", "Input", "Deconvolved", "Recon", "Residual"],
             cbar=True,
-            subtitles=[subtitles, subtitles, metrics_str, subtitles],
+            subtitles=[subtitles, subtitles, subtitles, metrics_str, subtitles],
+            same_scale=[2, 3],
+            scale_row=3,
         )
 
 

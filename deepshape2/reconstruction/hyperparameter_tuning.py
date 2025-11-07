@@ -9,7 +9,7 @@ import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from deepshape2.data.loaders import CenterCrop
-from deepshape2.models import VAE, create_model
+from deepshape2.models import create_model
 from deepshape2.utils import (
     get_freest_gpu,
     get_progress_bar,
@@ -28,9 +28,8 @@ from deepshape2.visualization import plot
 # %% Constants / Configuration
 
 SPLITS = [5, 10, 20, 30]
-SCALE_FAC = 5e7
 N_PLOT = 5
-N_TRIALS = 200
+N_TRIALS = 100
 
 
 # %%
@@ -67,7 +66,7 @@ def parse_args():
 # %% Helper Functions
 
 
-def objective(trial, device, val_loader_subset, deblender, crop_fn):
+def objective(trial, device, val_loader_subset, crop_fn=CenterCrop(64)):
     """Optuna objective: tune f1, f2, falpha."""
     f1 = trial.suggest_float("f1", 0, 0.5)
     f2 = trial.suggest_float("f2", f1, 4)
@@ -88,105 +87,99 @@ def objective(trial, device, val_loader_subset, deblender, crop_fn):
             # Deconvolution
             deconvolved = model(im)
             decon_crop = crop_fn(deconvolved)
-
-            # Deblend
-            decon_scaled = torch.arcsinh_(decon_crop.mul_(SCALE_FAC))
-            decon_deblended = deblender(decon_scaled)[0]
-            recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
+            iso_crop = crop_fn(isolated_stamp)
 
             psnr_values.append(
-                psnr_torch(recon, isolated_stamp.unsqueeze(1)).detach().cpu()
+                psnr_torch(decon_crop, iso_crop.unsqueeze(1)).detach().cpu()
             )
 
     return -torch.cat(psnr_values).mean()
 
 
 def evaluate_best_params(
-    val_loader, best_params, device, deblender, crop_fn=CenterCrop(128), n=N_PLOT
+    val_loader,
+    best_params,
+    device,
+    crop_fn=CenterCrop(128),
+    n=N_PLOT,
 ):
     """
-    Evaluate PSNR and SSIM using the best Optuna parameters and visualize examples.
+    Evaluate the model using the best Optuna parameters on a validation dataloader.
+
+    Computes PSNR and SSIM, reports their statistics, and optionally visualizes
+    a few representative examples (targets, inputs, reconstructions, and residuals).
     """
 
-    # Initialize model
+    # --- Initialize model ---
     model = create_model(device=device, **best_params)
     model.eval()
 
-    # Containers for metrics and outputs
-    psnr_list, ssim_list = [], []
-    targets, inputs, outputs, decon_all = [], [], [], []
+    # --- Metric and image containers ---
+    psnr_all = []
+    targets, inputs, recon_all = [], [], []
 
-    # Progress bar
+    # --- Progress bar setup ---
     pbar = get_progress_bar(True, total=len(val_loader), **get_tqdm())
 
     with torch.inference_mode(), pbar:
         for im, iso in val_loader:
+            # Move to device
             im = im.to(device, non_blocking=True)
             iso = iso.to(device, non_blocking=True)
 
+            # Store target (ground truth)
+            targets.append(iso.cpu().numpy())
+
             # --- Model inference ---
-            decon = crop_fn(model(im))
-
-            decon_all.append(decon.squeeze(1).cpu())
-
-            # --- Deblending ---
-            decon_scaled = torch.arcsinh_(decon * SCALE_FAC)
-            deblended = deblender(decon_scaled)[0]
-            recon = torch.sinh_(deblended) / SCALE_FAC
-
-            # --- Move to CPU once ---
-            recon_cpu = recon.squeeze(1).cpu()
-            iso_cpu = iso.cpu()
-            inp_cpu = crop_fn(im[:, 0]).cpu()
+            recon = crop_fn(model(im))
 
             # --- Metrics ---
-            psnr = psnr_torch(recon_cpu.unsqueeze(1), iso_cpu.unsqueeze(1))
-            ssim = ssim_batch(recon_cpu.numpy(), iso_cpu.numpy())
+            psnr_val = psnr_torch(recon, iso.unsqueeze(1))
+            psnr_all.append(psnr_val.cpu().numpy())
 
-            psnr_list.append(psnr)
-            ssim_list.append(ssim)
-            targets.append(iso_cpu)
-            inputs.append(inp_cpu)
-            outputs.append(recon_cpu)
+            # --- Store reconstructions and inputs ---
+            recon_all.append(recon.cpu().numpy().squeeze())
+            inputs.append(crop_fn(im[:, 0]).cpu().numpy())
 
             pbar.update(1)
 
-    # --- Aggregate ---
-    psnr_all = torch.cat(psnr_list).numpy()
-    ssim_all = np.concatenate(ssim_list)
-    targets_all = torch.cat(targets).numpy()
-    inputs_all = torch.cat(inputs).numpy()
-    outputs_all = torch.cat(outputs).numpy()
-    decon_all = torch.cat(decon_all).numpy()
+    # --- Aggregate arrays ---
+    targets = np.concatenate(targets)
+    inputs = np.concatenate(inputs)
+    recon_all = np.concatenate(recon_all)
+    psnr_all = np.concatenate(psnr_all)
 
-    # --- Report ---
+    # --- Compute SSIM ---
+    ssim_all = ssim_batch(targets, recon_all)
+
+    # --- Report metrics ---
     print(
-        f"SSIM: Max {ssim_all.max():.03f} | Min {ssim_all.min():.03f} | Mean {ssim_all.mean():.03f}"
+        f"SSIM: Max {ssim_all.max():.3f} | Min {ssim_all.min():.3f} | Mean {ssim_all.mean():.3f}"
     )
     print(
-        f"PSNR: Max {psnr_all.max():.03f} dB | Min {psnr_all.min():.03f} dB | Mean {psnr_all.mean():.03f} dB"
+        f"PSNR: Max {psnr_all.max():.3f} dB | Min {psnr_all.min():.3f} dB | Mean {psnr_all.mean():.3f} dB"
     )
 
     # --- Visualization ---
     if n > 0:
         subtitles = [None] * n
-        metrics_str = [
-            f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_all[:n], psnr_all[:n])
+        flux_labels = [f"{np.max(fl) * 1e9:.2f} nJy" for fl in inputs[:n]]
+        metric_labels = [
+            f"{s:.2f}/{p:.2f} dB" for s, p in zip(ssim_all[:n], psnr_all[:n])
         ]
 
         plot(
             images=[
-                targets_all[:n],
-                inputs_all[:n],
-                decon_all[:n],
-                outputs_all[:n],
-                targets_all[:n] - outputs_all[:n],
+                targets[:n],
+                inputs[:n],
+                recon_all[:n],
+                targets[:n] - recon_all[:n],
             ],
-            caption=["Target", "Input", "Deconvolved", "Recon", "Residual"],
+            caption=["Target", "Input", "Reconstructed", "Residual"],
             cbar=True,
-            subtitles=[subtitles, subtitles, subtitles, metrics_str, subtitles],
-            same_scale=[2, 3],
-            scale_row=3,
+            subtitles=[flux_labels, subtitles, metric_labels, subtitles],
+            # same_scale=[2, 3],
+            # scale_row=3,
         )
 
 
@@ -211,17 +204,6 @@ if __name__ == "__main__":
     best_params_dict = (
         load(optuna_best_params_path) if os.path.exists(optuna_best_params_path) else {}
     )
-
-    # --- Cropping transform
-    crop_128 = CenterCrop(128)
-
-    # --- Load pre-trained deblender
-    deblender = VAE().to(device)
-    ckpt_path = os.path.join(cfg["MODEL_DIR"], "vae_mha.pt")
-    deblender.load_state_dict(
-        torch.load(ckpt_path, map_location=device, weights_only=False)["best_weights"]
-    )
-    deblender.eval()
 
     # Dataset setup
     dirty_all = facet_data[f"wide/facets_{GRID_SIZE}/dirty"][:]
@@ -277,7 +259,7 @@ if __name__ == "__main__":
 
     start = time.time()
     study.optimize(
-        lambda trial: objective(trial, device, val_loader_subset, deblender, crop_128),
+        lambda trial: objective(trial, device, val_loader_subset),
         n_trials=N_TRIALS,
     )
 
@@ -290,9 +272,7 @@ if __name__ == "__main__":
     print("Best Parameters:", study.best_params)
 
     # --- Evaluate and plot
-    evaluate_best_params(
-        val_loader_all, study.best_params, device, deblender, crop_fn=crop_128
-    )
+    evaluate_best_params(val_loader_all, study.best_params, device)
 
     # --- Optuna visualization
     fig1 = optuna.visualization.plot_parallel_coordinate(study)

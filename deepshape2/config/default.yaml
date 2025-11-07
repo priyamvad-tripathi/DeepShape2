@@ -19,7 +19,7 @@ FFTBIGSIZE: 81488 # GalSim FFTBIG parameter
 SCALE_FACTOR: 5e7
 
 # VAE parameters
-VAE_beta: 1e-3  # KL Divergence weight for VAE
+VAE_beta: 1e-4 # KL Divergence weight for VAE
 VAE_lr_init: 1e-4 # Initial learning rate for VAE
 
 # TQDM parameters

@@ -7,7 +7,11 @@ from deepshape2.data import loaders
 from deepshape2.deblending import predict_multiple
 from deepshape2.models import VAE, CAT_Unet
 from deepshape2.utils import get_freest_gpu, load, load_config, load_h5, save, set_seed
-from deepshape2.visualization import plot, probability_distribution_metric
+from deepshape2.visualization import (
+    binned_boxplot,
+    plot,
+    probability_distribution_metric,
+)
 
 # %% Set default parameters
 cfg = load_config()
@@ -53,17 +57,13 @@ test_loader = DataLoader(
     pin_memory=True,
 )
 
-
-results = predict_multiple(
-    [model1, model2, model3],
-    [
-        loc_weights + "vae_deblender.pt",
-        loc_weights + "simple_deblender.pt",
-        loc_weights + "cat_deblender.pt",
-    ],
-    test_loader,
-    device,
-)
+models = [model1, model2, model3]
+ckps = [
+    loc_weights + "vae_deblender_MHA_3_low_beta.pt",
+    loc_weights + "vae_cnn.pt",
+    loc_weights + "cat_deblender.pt",
+]
+results = predict_multiple(models, ckps, test_loader, device, do_SSIM=True)
 
 # %% Load fluxes and blends
 try:
@@ -73,22 +73,29 @@ except NameError:
 
 blend = results["blend"]
 
-percentiles = [75, 91, 99, 99.99]
-values = np.percentile(blend, percentiles)
-indices = [np.argmin(np.abs(blend - v)) for v in values]
-
 with load_h5(DATA_DIR + "deep_set.h5", mode="r") as f:
     patch_df = pd.DataFrame.from_records(f["patch_000"]["patch_df"][()])
     fluxes = patch_df["flux"].values[patch_df["flux_mask"]]
     del patch_df
 
+shape_true = results["shape_true"]
+for model in ["model_1", "model_2", "model_3"]:
+    shape_recon = results[model]["shape"]
+    shape_diff = np.linalg.norm(shape_recon - shape_true, axis=1)
+    results[model]["shape_diff"] = shape_diff
+
+
 # %% Plot Deblended Stamps
+
+percentiles = [75, 95, 98.8, 99.92]
+values = np.percentile(blend, percentiles)
+indices = [np.argmin(np.abs(blend - v)) for v in values]
+
 tit1 = [rf"{fl * 1e6:.2f} $\mu$Jy" for fl in fluxes[indices]]
 tit2 = [f"{bl:.3f}" for bl in blend[indices]]
 
 isolated = results["targets"][indices]
 blends = results["inputs"][indices]
-shape_true = results["shape_true"][indices]
 
 recon = []
 tit_recons = []
@@ -96,11 +103,9 @@ for model in ["model_1", "model_2", "model_3"]:
     recon.append(results[model]["output"][indices])
     psnr = results[model]["psnr"][indices]
 
-    shape_recon = results[model]["shape"][indices]
-    shape_diff = np.linalg.norm(shape_recon - shape_true, axis=1)
+    shape_diff = results[model]["shape_diff"][indices]
 
     tit_recons.append([f"{p:.2f} dB/ {sh:.3f}" for p, sh in zip(psnr, shape_diff)])
-
 
 plot(
     [isolated, blends, recon[0], recon[1], recon[2]],
@@ -111,39 +116,69 @@ plot(
     subtitles=[tit1, tit2, tit_recons[0], tit_recons[1], tit_recons[2]],
     fname=RESULTS_DIR + "deblending/stamps.pdf",
 )
+
+
 # %% Add fluxes and save
-results["flux"] = fluxes.copy()
+results["flux"] = fluxes.copy() * 1e6
 save(results, DATA_DIR + "deblending_results.pkl")
 
 # %% Plot metrics distribution
+psnr_all = [
+    results["model_1"]["psnr"],
+    results["model_2"]["psnr"],
+    results["model_3"]["psnr"],
+]
 probability_distribution_metric(
-    [
-        results["model_1"]["psnr"],
-        results["model_2"]["psnr"],
-        results["model_3"]["psnr"],
-    ],
+    psnr_all,
     clip_left=20,
     fname=RESULTS_DIR + "deblending/psnr.pdf",
 )
 
+shape_diff = [
+    results["model_1"]["shape_diff"] * 100,
+    results["model_2"]["shape_diff"] * 100,
+    results["model_3"]["shape_diff"] * 100,
+]
 
-shape_diff = []
+# Filter out bad cases: status!=0 or true ellipticty too large
 flags = results["status_true"] * (
     np.sqrt(np.sum(results["shape_true"] ** 2, axis=1)) < 0.6
 )
 for model in ["model_1", "model_2", "model_3"]:
-    shape_recon = results[model]["shape"]
     flags = flags * results[model]["status"]
-    shape_diff.append(np.linalg.norm(shape_recon - results["shape_true"], axis=1))
 
 for i in range(len(shape_diff)):
-    shape_diff[i] = shape_diff[i][flags == 0]
-    shape_diff[i] *= 1e2
+    shape_diff[i][flags != 0] = np.NaN
+
 
 probability_distribution_metric(
     shape_diff,
-    metric_name=r"$100 \, \Delta \epsilon$",
+    metric_name=r"$\Delta \epsilon \,[\times 100]$",
     clip_left=0,
     clip_right=10,
     fname=RESULTS_DIR + "deblending/ellipticity.pdf",
+)
+
+# %% Binned boxplots
+flux = results["flux"]
+blend = results["blend"]
+metrics = np.array([shape_diff, psnr_all])
+
+# binned_boxplot(
+#     flux,
+#     metrics,
+#     bin_edges=[10, 40, 70, 100, 130, 160, 200],
+#     fname=RESULTS_DIR + "deblending/box_plot_flux.pdf",
+# )
+
+log_edges = np.logspace(-2, 0, 7)
+
+binned_boxplot(
+    results["blend"],
+    metrics,
+    bin_edges=log_edges,
+    logx=True,
+    stat_name="Blendedness",
+    legend=True,
+    fname=RESULTS_DIR + "deblending/box_plot_blend.pdf",
 )

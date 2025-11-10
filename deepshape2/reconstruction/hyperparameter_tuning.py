@@ -69,8 +69,8 @@ def parse_args():
 def objective(trial, device, val_loader_subset, crop_fn=CenterCrop(64)):
     """Optuna objective: tune f1, f2, falpha."""
     f1 = trial.suggest_float("f1", 0, 0.5)
-    f2 = trial.suggest_float("f2", f1, 4)
-    falpha = trial.suggest_float("falpha", 1, 6)
+    f2 = trial.suggest_float("f2", 0.8, 4)
+    falpha = trial.suggest_float("falpha", 0, 4)
 
     model = create_model(device=device, f1=f1, f2=f2, falpha=falpha)
     model.eval()
@@ -206,20 +206,20 @@ if __name__ == "__main__":
     )
 
     # Dataset setup
-    dirty_all = facet_data[f"wide/facets_{GRID_SIZE}/dirty"][:]
-    psf = facet_data[f"wide/facets_{GRID_SIZE}/psf"][:]
+    dirty_all = facet_data[f"deep/facets_{GRID_SIZE}/dirty"][:]
+    psf = facet_data[f"deep/facets_{GRID_SIZE}/psf"][:]
     im_all = np.stack([dirty_all, psf], axis=1)
 
-    isolated_stamps = facet_data["wide/isolated_stamps"][:]
+    isolated_stamps = facet_data["deep/isolated_stamps"][:]
 
     im_all_t = torch.from_numpy(im_all)
     stamps_t = torch.from_numpy(isolated_stamps)
     dataset_all = TensorDataset(im_all_t, stamps_t)
 
     # Create subset for validation set for Optuna
-    peak = facet_data["wide/peak"][:]
-    threshold = np.percentile(peak, SPLITS[USE_SPLIT])
-    mask = np.where(peak > threshold)[0]
+    # peak = facet_data["wide/peak"][:]
+    # threshold = np.percentile(peak, SPLITS[USE_SPLIT])
+    mask = np.where(facet_data["deep/flux"][:] > 50e-06)[0]
 
     # Limit to at most 1000 samples
     max_samples = 1000
@@ -247,7 +247,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = f"facets_{GRID_SIZE}_split_{SPLITS[USE_SPLIT]}"
+    study_name = f"facets_{GRID_SIZE}_split_flux_gt_50uJy"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(

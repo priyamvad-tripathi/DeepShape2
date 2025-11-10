@@ -24,6 +24,8 @@ logging.getLogger().addHandler(logging.NullHandler())
 warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
+__all__ = ["get_facets", "residual_facet_image"]
+
 
 # %% Functions
 def _process_facet(vis: xarray.Dataset, galaxy_location, NPIX_facet=256):

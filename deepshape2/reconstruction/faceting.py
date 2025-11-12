@@ -6,6 +6,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import xarray
+from astropy import units as u
 from dask import compute, delayed
 from dask.distributed import Client, LocalCluster
 from ska_sdp_datamodels.visibility import create_visibility_from_ms
@@ -25,6 +26,10 @@ warnings.simplefilter(action="ignore", category=FutureWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 
 __all__ = ["get_facets", "residual_facet_image"]
+
+cfg = load_config()
+NPIX_SKY = cfg["NPIX_SKY"]
+SCALE_RADIANS = cfg["SCALE_RADIANS"]
 
 
 # %% Functions
@@ -79,19 +84,32 @@ def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=Non
 
 
 def residual_facet_image(
-    vis_original: xarray.Dataset, reconstructed_facet: np.ndarray, gal_center
+    vis_original: xarray.Dataset, reconstructed_facet: np.ndarray, galaxy_location
 ):
     if reconstructed_facet.ndim != 2:
         raise ValueError("Reconstructed_facet must be a 2D array")
 
+    # --- Compute pixel offsets from image centre ---
+    x_pix, y_pix = galaxy_location
+    dx = x_pix - NPIX_SKY // 2.0
+    dy = y_pix - NPIX_SKY // 2.0
+
+    # --- Compute new phasecentre SkyCoord ---
+    pointing_centre = vis_original.attrs["phasecentre"]
+
+    offset_ra = -dx * SCALE_RADIANS * u.rad
+    offset_dec = dy * SCALE_RADIANS * u.rad
+
+    gal_center_skycoord = pointing_centre.spherical_offsets_by(offset_ra, offset_dec)
+
     # Residual visibilities & image
     vis_model = predict_visibilities_from_array(
         image_array=reconstructed_facet,
-        ra_deg=gal_center[0],
-        dec_deg=gal_center[1],
+        ra_deg=gal_center_skycoord.ra.deg,
+        dec_deg=gal_center_skycoord.dec.deg,
     )
 
-    vis_facet = rephase_visibility(vis_original, gal_center)
+    vis_facet = rephase_visibility(vis_original, galaxy_location)
 
     vis_residual = subtract_visibility(vis_facet, vis_model)
 

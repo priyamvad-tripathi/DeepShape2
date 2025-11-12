@@ -6,7 +6,7 @@ from torch.utils.data import DataLoader
 from deepshape2.data import loaders
 from deepshape2.deblending import predict_multiple
 from deepshape2.models import VAE, CAT_Unet
-from deepshape2.utils import get_freest_gpu, load, load_config, load_h5, save, set_seed
+from deepshape2.utils import get_freest_gpu, load_config, load_h5, save, set_seed
 from deepshape2.visualization import (
     binned_boxplot,
     plot,
@@ -59,18 +59,13 @@ test_loader = DataLoader(
 
 models = [model1, model2, model3]
 ckps = [
-    loc_weights + "vae_deblender_MHA_3_low_beta.pt",
+    loc_weights + "vae_mha.pt",
     loc_weights + "vae_cnn.pt",
-    loc_weights + "cat_deblender.pt",
+    loc_weights + "cat.pt",
 ]
 results = predict_multiple(models, ckps, test_loader, device, do_SSIM=True)
 
 # %% Load fluxes and blends
-try:
-    results
-except NameError:
-    results = load(DATA_DIR + "deblending_results.pkl")
-
 blend = results["blend"]
 
 with load_h5(DATA_DIR + "deep_set.h5", mode="r") as f:
@@ -171,7 +166,7 @@ metrics = np.array([shape_diff, psnr_all])
 #     fname=RESULTS_DIR + "deblending/box_plot_flux.pdf",
 # )
 
-log_edges = np.logspace(-2, 0, 7)
+log_edges = np.logspace(-2, np.log10(0.8), 6)
 
 binned_boxplot(
     results["blend"],

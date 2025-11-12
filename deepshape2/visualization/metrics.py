@@ -254,7 +254,7 @@ def binned_boxplot(
     # -----------------------------
     if logx:
         stat_max = np.max(stat_values)
-        major_ticks = [1e-2, 1e-1, stat_max * 1.04]
+        major_ticks = [1e-2, 1e-1, stat_max]
         ax_kde.set_xticks(major_ticks)
         ax_kde.set_xticklabels([r"$10^{-2}$", r"$10^{-1}$", r"$10^{0}$"])
         ax_kde.minorticks_off()

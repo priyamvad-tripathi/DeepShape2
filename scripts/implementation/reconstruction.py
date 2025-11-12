@@ -72,7 +72,8 @@ recon, decon = reconstruct_facets(
 )
 
 residuals = [
-    residual_facet_image(vis, dec, galaxy_locations[i]) for i, dec in enumerate(decon)
+    residual_facet_image(vis, np.zeros_like(dec), galaxy_locations[inds[i]])
+    for i, dec in enumerate(decon)
 ]
 
 # Metrics
@@ -119,6 +120,6 @@ plot(
         none_title,
         metrics_str,
     ],
-    same_scale=[0, 1, 3, 5],
-    scale_row=0,
+    same_scale=[2, 4],
+    scale_row=2,
 )

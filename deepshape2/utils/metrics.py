@@ -2,7 +2,10 @@
 import numpy as np
 import torch
 import torch.nn.functional as F
+
+# from scipy.signal import convolve2d
 from skimage.metrics import structural_similarity as ssim
+from torch.fft import fft2, ifft2, ifftshift
 
 __all__ = [
     "psnr_batch",
@@ -10,6 +13,7 @@ __all__ = [
     "blendedness",
     "contamination",
     "psnr_torch",
+    "chi2_dirty",
 ]
 
 
@@ -137,3 +141,39 @@ def contamination(true_images, blended_images):
         result[i] = (num / denom - 1) if denom != 0 else np.nan
 
     return result
+
+
+# %%
+def chi2_dirty(dirty, decon, psf, sigma=0.71e-6):
+    """
+    dirty, decon, psf: [N,1,H,W] torch tensors
+    sigma: float (noise std)
+    Returns:
+        chi2: [N]
+        residual: [N,1,H,W]
+    """
+    N, _, H, W = dirty.shape
+    pad_y = H // 2
+    pad_x = W // 2
+
+    # Pad both image and psf
+    decon_p = torch.nn.functional.pad(
+        decon, (pad_x, pad_x, pad_y, pad_y), mode="constant", value=0
+    )
+    psf_p = torch.nn.functional.pad(
+        psf, (pad_x, pad_x, pad_y, pad_y), mode="constant", value=0
+    )
+
+    # FFTs
+    F_decon = fft2(decon_p)
+    F_psf = fft2(ifftshift(psf_p, dim=(-2, -1)))
+
+    # Linear convolution via FFT
+    conv = ifft2(F_decon * F_psf).real
+    # Crop back to original size
+    conv = conv[..., pad_y : pad_y + H, pad_x : pad_x + W]
+
+    residual = dirty - conv
+    chi2 = (residual**2).sum(dim=(1, 2, 3)) / (H * W * sigma**2)
+
+    return chi2, residual

@@ -6,6 +6,8 @@ from typing import List, Optional, Tuple, Union
 import h5py
 import numpy as np
 import torch
+import torchvision.transforms as transforms
+import torchvision.transforms.v2 as v2
 from torch.utils.data import DataLoader, Dataset, get_worker_info
 
 from deepshape2.utils import load_config, set_seed
@@ -204,6 +206,154 @@ class BlendDataset(Dataset):
                 pass
         if hasattr(self, "_worker_h5"):
             for f in self._worker_h5.values():
+                try:
+                    f.close()
+                except Exception:
+                    pass
+
+
+# %% Denoiser dataloader
+class DenoiseDataset(Dataset):
+    def __init__(
+        self,
+        path: str,
+        key: str,
+        groups=None,
+        transform=None,
+        min_flux: float = None,
+    ):
+        """
+        Minimal multi-group HDF5 dataset for clean images.
+
+        Args:
+            path (str): path to HDF5 file
+            key (str): key inside each group, e.g. 'isolated_stamps'
+            groups (list[str], optional): restrict to these groups (useful for train/val split)
+            transform (callable): transforms applied to the tensor (default flip-only)
+            min_flux (float, optional): optionally filter based on stamp_flux
+        """
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"HDF5 file not found: {path}")
+
+        self.path = path
+        self.key = key
+        self.min_flux = min_flux
+
+        # Default transforms (same structure as you specified)
+        if transform is None:
+            self.transform = transforms.Compose(
+                [
+                    v2.RandomHorizontalFlip(),
+                    v2.RandomVerticalFlip(),
+                ]
+            )
+        else:
+            self.transform = transform
+
+        # Store group metadata
+        self.groups = []
+        self.group_sizes = []
+        self.valid_indices = []
+
+        with h5py.File(self.path, "r") as hf:
+            available = list(hf.keys())
+
+            # Validate group selection
+            if groups is not None:
+                missing = [g for g in groups if g not in available]
+                if missing:
+                    raise ValueError(f"These groups do not exist: {missing}")
+                self.groups = groups
+            else:
+                self.groups = available
+
+            # Precompute valid indices per group
+            for g in self.groups:
+                group = hf[g]
+                total = len(group[self.key])
+
+                if self.min_flux is not None:
+                    flux = np.sum(group["isolated_stamps"], axis=(1, 2))
+                    valid = np.where(flux > self.min_flux)[0]
+                else:
+                    valid = np.arange(total)
+
+                self.valid_indices.append(valid)
+                self.group_sizes.append(len(valid))
+
+        # Cumulative sizes for global indexing
+        self.cumulative_sizes = np.cumsum(self.group_sizes).tolist()
+
+        # Worker-local handle
+        self._hf = None
+
+    # ---------------- HDF5 handle ---------------- #
+    def _get_h5(self):
+        """Ensure each worker opens its own HDF5 file handle."""
+        worker_info = get_worker_info()
+
+        # Single worker
+        if worker_info is None:
+            if self._hf is None:
+                self._hf = h5py.File(self.path, "r")
+            return self._hf
+
+        # Multi-worker
+        wid = worker_info.id
+        if not hasattr(self, "_worker_files"):
+            self._worker_files = {}
+
+        if wid not in self._worker_files:
+            self._worker_files[wid] = h5py.File(self.path, "r")
+
+        return self._worker_files[wid]
+
+    # ---------------- Length ---------------- #
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+
+    # ---------------- Locate index ---------------- #
+    def _locate(self, global_idx):
+        if global_idx < 0 or global_idx >= self.cumulative_sizes[-1]:
+            raise IndexError(f"Index {global_idx} out of range")
+
+        group_idx = bisect.bisect_right(self.cumulative_sizes, global_idx)
+        prev = 0 if group_idx == 0 else self.cumulative_sizes[group_idx - 1]
+        offset = global_idx - prev
+        local_idx = self.valid_indices[group_idx][offset]
+        return self.groups[group_idx], local_idx
+
+    # ---------------- Retrieve item ---------------- #
+    def __getitem__(self, idx):
+        if torch.is_tensor(idx):
+            idx = idx.item()
+
+        hf = self._get_h5()
+        group_name, local_idx = self._locate(idx)
+        group = hf[group_name]
+
+        img = np.array(group[self.key][local_idx])
+
+        if img.ndim != 3:
+            img = img[np.newaxis, :, :]
+
+        img = torch.from_numpy(img.astype(np.float32))
+        img = crop_128(img)
+        if self.transform:
+            img = self.transform(img)
+
+        return img
+
+    # ---------------- Cleanup ---------------- #
+    def __del__(self):
+        try:
+            if hasattr(self, "_hf") and self._hf is not None:
+                self._hf.close()
+        except Exception:
+            pass
+
+        if hasattr(self, "_worker_files"):
+            for f in self._worker_files.values():
                 try:
                     f.close()
                 except Exception:

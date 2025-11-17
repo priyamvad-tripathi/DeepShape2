@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader, TensorDataset
 from deepshape2.data.loaders import CenterCrop
 from deepshape2.models import create_model
 from deepshape2.utils import (
+    chi2_dirty,
+    extract_image,
     get_freest_gpu,
     get_progress_bar,
     get_tqdm,
@@ -24,12 +26,6 @@ from deepshape2.utils import (
     time_string,
 )
 from deepshape2.visualization import plot
-
-# %% Constants / Configuration
-
-SPLITS = [5, 10, 20, 30]
-N_PLOT = 5
-N_TRIALS = 100
 
 
 # %%
@@ -45,19 +41,27 @@ def parse_args():
     )
 
     parser.add_argument(
-        "-s",
-        "--split-index",
+        "-fl",
+        "--flux",
         type=int,
-        default=0,
-        help="Split index (default: 0)",
+        default=50,
+        help="Minimum flux threshold (default: 50)",
     )
 
     parser.add_argument(
         "-b",
         "--batch-size",
         type=int,
-        default=128,
-        help="Batch size (default: 128)",
+        default=196,
+        help="Batch size (default: 196)",
+    )
+
+    parser.add_argument(
+        "-n",
+        "--n-trials",
+        type=int,
+        default=100,
+        help="Number of Optuna trials (default: 100)",
     )
 
     return parser.parse_args()
@@ -66,7 +70,7 @@ def parse_args():
 # %% Helper Functions
 
 
-def objective(trial, device, val_loader_subset, crop_fn=CenterCrop(64)):
+def objective(trial, device, val_loader_subset, crop_fn=CenterCrop(100)):
     """Optuna objective: tune f1, f2, falpha."""
     f1 = trial.suggest_float("f1", 0, 0.5)
     f2 = trial.suggest_float("f2", 0.8, 4)
@@ -100,8 +104,8 @@ def evaluate_best_params(
     val_loader,
     best_params,
     device,
-    crop_fn=CenterCrop(128),
-    n=N_PLOT,
+    crop_fn=CenterCrop(100),
+    n=5,
 ):
     """
     Evaluate the model using the best Optuna parameters on a validation dataloader.
@@ -115,8 +119,8 @@ def evaluate_best_params(
     model.eval()
 
     # --- Metric and image containers ---
-    psnr_all = []
-    targets, inputs, recon_all = [], [], []
+    psnr_all, chi2_all = [], []
+    targets, inputs, recon_all, res_all = [], [], [], []
 
     # --- Progress bar setup ---
     pbar = get_progress_bar(True, total=len(val_loader), **get_tqdm())
@@ -131,15 +135,19 @@ def evaluate_best_params(
             targets.append(iso.cpu().numpy())
 
             # --- Model inference ---
-            recon = crop_fn(model(im))
+            recon = model(im)
 
             # --- Metrics ---
-            psnr_val = psnr_torch(recon, iso.unsqueeze(1))
+            psnr_val = psnr_torch(crop_fn(recon), crop_fn(iso).unsqueeze(1))
             psnr_all.append(psnr_val.cpu().numpy())
+
+            chi2, res = chi2_dirty(im[:, :1], recon, im[:, 1:])
+            chi2_all.append(chi2.cpu().numpy())
 
             # --- Store reconstructions and inputs ---
             recon_all.append(recon.cpu().numpy().squeeze())
-            inputs.append(crop_fn(im[:, 0]).cpu().numpy())
+            inputs.append(im[:, 0].cpu().numpy())
+            res_all.append(res.cpu().numpy().squeeze())
 
             pbar.update(1)
 
@@ -147,10 +155,12 @@ def evaluate_best_params(
     targets = np.concatenate(targets)
     inputs = np.concatenate(inputs)
     recon_all = np.concatenate(recon_all)
+    chi2_all = np.concatenate(chi2_all)
+    res_all = np.concatenate(res_all)
     psnr_all = np.concatenate(psnr_all)
 
     # --- Compute SSIM ---
-    ssim_all = ssim_batch(targets, recon_all)
+    ssim_all = ssim_batch(extract_image(targets, 100), extract_image(recon_all, 100))
 
     # --- Report metrics ---
     print(
@@ -159,25 +169,32 @@ def evaluate_best_params(
     print(
         f"PSNR: Max {psnr_all.max():.3f} dB | Min {psnr_all.min():.3f} dB | Mean {psnr_all.mean():.3f} dB"
     )
+    print(
+        f"Chi2: Min {chi2_all.min():.3f} | Max {chi2_all.max():.3f} | Mean {chi2_all.mean():.3f}"
+    )
 
     # --- Visualization ---
     if n > 0:
+        np.random.seed(40)
+        inds = np.random.choice(len(targets), size=n, replace=False)
+
         subtitles = [None] * n
-        flux_labels = [f"{np.max(fl) * 1e9:.2f} nJy" for fl in inputs[:n]]
+        flux_labels = [f"{np.max(fl) * 1e6:.3f} uJy" for fl in targets[inds]]
         metric_labels = [
-            f"{s:.2f}/{p:.2f} dB" for s, p in zip(ssim_all[:n], psnr_all[:n])
+            f"{s:.2f}/{p:.2f} dB" for s, p in zip(ssim_all[inds], psnr_all[inds])
         ]
+        chi2_labels = [f"{c:.3f}" for c in chi2_all[inds]]
 
         plot(
             images=[
-                targets[:n],
-                inputs[:n],
-                recon_all[:n],
-                targets[:n] - recon_all[:n],
+                extract_image(targets[inds]),
+                extract_image(inputs[inds]),
+                extract_image(recon_all[inds]),
+                extract_image(res_all[inds]),
             ],
             caption=["Target", "Input", "Reconstructed", "Residual"],
             cbar=True,
-            subtitles=[flux_labels, subtitles, metric_labels, subtitles],
+            subtitles=[flux_labels, subtitles, metric_labels, chi2_labels],
             # same_scale=[2, 3],
             # scale_row=3,
         )
@@ -187,13 +204,19 @@ def evaluate_best_params(
 if __name__ == "__main__":
     args = parse_args()
     GRID_SIZE = args.facet_size
-    USE_SPLIT = args.split_index
     BATCH_SIZE = args.batch_size
+    MIN_FLUX = args.flux
+    N_TRIALS = args.n_trials
+
+    GRID_SIZE = 128
+    BATCH_SIZE = 512
+    MIN_FLUX = 50
 
     # --- Load Config and Data
     cfg = load_config()
     DATA_DIR = cfg["DATA_DIR"]
     facet_data = load_h5(DATA_DIR + "facets.h5")
+    data = load_h5(DATA_DIR + "deep_set.h5")
 
     # --- Torch setup
     device = get_freest_gpu(set_device=True)
@@ -210,16 +233,16 @@ if __name__ == "__main__":
     psf = facet_data[f"deep/facets_{GRID_SIZE}/psf"][:]
     im_all = np.stack([dirty_all, psf], axis=1)
 
-    isolated_stamps = facet_data["deep/isolated_stamps"][:]
+    blended_stamps = extract_image(data["patch_000/blended_stamps"][:])
 
     im_all_t = torch.from_numpy(im_all)
-    stamps_t = torch.from_numpy(isolated_stamps)
-    dataset_all = TensorDataset(im_all_t, stamps_t)
+    stamps_t = torch.from_numpy(blended_stamps)
 
     # Create subset for validation set for Optuna
     # peak = facet_data["wide/peak"][:]
-    # threshold = np.percentile(peak, SPLITS[USE_SPLIT])
-    mask = np.where(facet_data["deep/flux"][:] > 50e-06)[0]
+    mask1 = np.where(facet_data["deep/flux"][:] > MIN_FLUX * 1e-06)[0]
+    mask2 = np.where(facet_data["deep/peak"][:] > 0.71e-06 / 3)[0]
+    mask = np.intersect1d(mask1, mask2)
 
     # Limit to at most 1000 samples
     max_samples = 1000
@@ -229,6 +252,7 @@ if __name__ == "__main__":
     rand_indices = np.random.choice(mask, size=num_samples, replace=False)
 
     # Create TensorDataset with selected samples
+    dataset_all = TensorDataset(im_all_t[mask], stamps_t[mask])
     dataset_subset = TensorDataset(im_all_t[rand_indices], stamps_t[rand_indices])
 
     val_loader_all = DataLoader(
@@ -247,7 +271,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = f"facets_{GRID_SIZE}_split_flux_gt_50uJy"
+    study_name = f"facets_{GRID_SIZE}_peak_flux_{MIN_FLUX}"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(

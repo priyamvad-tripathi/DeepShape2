@@ -89,7 +89,8 @@ DEF_falpha = 3.9949
 # Predefined locations to check for weights
 WEIGHT_PATHS = [
     cfg["GENCI_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
-    cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
+    # cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
+    cfg["MODEL_DIR"] + " drunet_gray.pth",
 ]
 
 

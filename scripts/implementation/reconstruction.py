@@ -10,6 +10,7 @@ from deepshape2.models import VAE
 from deepshape2.reconstruction import reconstruct_facets, residual_facet_image
 from deepshape2.utils import (
     blendedness,
+    chi2_dirty,
     extract_image,
     get_freest_gpu,
     load_config,
@@ -17,12 +18,14 @@ from deepshape2.utils import (
     psnr_batch,
     set_seed,
     shape_galsim,
+    ssim_batch,
 )
 from deepshape2.visualization import plot
 
 # %% Constants / Configuration
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
+RESULTS_DIR = cfg["RESULTS_DIR"]
 # %% Load Data
 facet_data = load_h5(os.path.join(DATA_DIR, "facets.h5"))
 data = load_h5(os.path.join(DATA_DIR, "deep_set.h5"))
@@ -57,7 +60,11 @@ isolated_stamps = data["patch_000/isolated_stamps"][:]
 blended_stamps = data["patch_000/blended_stamps"][:]
 peak = isolated_stamps.max(axis=(1, 2))
 
+
+mask = peak > 0.71e-06
+
 # Random subset of sources to visualize
+np.random.seed(42)
 inds = np.random.choice(np.where(mask)[0], size=5, replace=False)
 
 # %% Reconstruction and Evaluation
@@ -72,7 +79,7 @@ recon, decon = reconstruct_facets(
 )
 
 residuals = [
-    residual_facet_image(vis, np.zeros_like(dec), galaxy_locations[inds[i]])
+    residual_facet_image(vis, dec, galaxy_locations[inds[i]])
     for i, dec in enumerate(decon)
 ]
 
@@ -84,7 +91,12 @@ shape_recon = shape_galsim(extract_image(recon))[0]
 shape_diff = np.linalg.norm(shape_recon - shape_true, axis=1)
 
 psnr_vals_2 = psnr_batch(extract_image(iso, 100), extract_image(decon, 100))
-metrics_str_2 = [f"{p:.02f} dB" for p in psnr_vals_2]
+ssim_vals_2 = ssim_batch(extract_image(iso, 100), extract_image(decon, 100))
+metrics_str_2 = [f"{p:.02f} dB / {s:.03f}" for p, s in zip(psnr_vals_2, ssim_vals_2)]
+
+
+chi2, res = chi2_dirty(extract_image(dirty), extract_image(decon), extract_image(psf))
+metrics_res = [f"{c:.3f}" for c in chi2]
 
 metrics_str = [f"{p:.02f} dB / {sd:.03f}" for p, sd in zip(psnr_vals, shape_diff)]
 flux_labels = [f"{p * 1e6:.3f} µJy " for p in peak[inds]]
@@ -94,15 +106,24 @@ none_title = [None] * len(inds)
 
 
 # %% Plotting
+images = [
+    extract_image(iso),
+    extract_image(blend),
+    extract_image(dirty),
+    extract_image(decon),
+    extract_image(residuals),
+    extract_image(recon),
+]
+subtitles = [
+    flux_labels,
+    blendedness_labels,
+    none_title,
+    metrics_str_2,
+    metrics_res,
+    metrics_str,
+]
 plot(
-    images=[
-        extract_image(iso),
-        extract_image(blend),
-        extract_image(dirty),
-        extract_image(decon),
-        extract_image(residuals),
-        extract_image(recon),
-    ],
+    images=images,
     caption=[
         "Isolated",
         "Blended",
@@ -112,14 +133,7 @@ plot(
         "Reconstructed",
     ],
     cbar=True,
-    subtitles=[
-        flux_labels,
-        blendedness_labels,
-        none_title,
-        metrics_str_2,
-        none_title,
-        metrics_str,
-    ],
-    same_scale=[2, 4],
-    scale_row=2,
+    subtitles=subtitles,
+    # same_scale=[0, 1],
+    # scale_row=0,
 )

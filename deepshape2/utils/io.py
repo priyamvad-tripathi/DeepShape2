@@ -24,6 +24,19 @@ def load_config(path: str = None):
     """
     cfg_path = path or DEFAULT_CONFIG_PATH
     cfg = OmegaConf.load(cfg_path)
+
+    run_env = os.getenv("RUN_ENV", "local")
+
+    if run_env == "genci":
+        base = cfg["GENCI_DIR"]
+        cfg["TQDM"] = False
+    else:
+        base = cfg["LOCAL_DIR"]
+        cfg["TQDM"] = True
+
+    cfg["DATA_DIR"] = base + "Data/"
+    cfg["MODEL_DIR"] = base + "Model_weights/"
+
     return cfg
 
 

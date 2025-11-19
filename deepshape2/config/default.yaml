@@ -32,8 +32,7 @@ tqdm:
   unit: "batch"
   
 # Paths
-MODEL_DIR: "/scratch/tripathi/DS2/Model_weights/"
-DATA_DIR: "/scratch/tripathi/DS2/Data/"
+LOCAL_DIR: "/scratch/tripathi/DS2/"
 RESULTS_DIR: "/home/tripathi/DeepShape2/results/"
 TRECS_DIR: "/scratch/tripathi/TRECS/"
 GENCI_DIR: "/lustre/fswork/projects/rech/klu/uyt81gs/DS2/"

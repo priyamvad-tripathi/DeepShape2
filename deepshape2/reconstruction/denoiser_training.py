@@ -21,13 +21,13 @@ from deepshape2.utils import (
     ssim_batch,
     time_string,
 )
-from deepshape2.visualization import plot
+from deepshape2.visualization import plot, plot_losses
 
 # %% Defaults and Configurations
 cfg = load_config()
-GENCI_DIR = cfg["GENCI_DIR"]
-DATA_DIR = GENCI_DIR + "Data/"
-MODEL_DIR = GENCI_DIR + "Model_weights/"
+DATA_DIR = cfg["DATA_DIR"]
+MODEL_DIR = cfg["MODEL_DIR"]
+TQDM_FLAG = cfg["TQDM"]
 
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + "denoiser_isolated.pt"
@@ -47,7 +47,7 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:45], group_names[45:50]
+group_names_train, group_names_val = group_names[:40], group_names[40:45]
 
 # Split into train and validation sets
 train_dataset = DenoiseDataset(
@@ -67,7 +67,7 @@ val_dataset = DenoiseDataset(
 # Initialize DataLoaders
 train_loader = DataLoader(
     train_dataset,
-    batch_size=16,
+    batch_size=32,
     shuffle=True,
     num_workers=4,
     pin_memory=True,
@@ -76,7 +76,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=16,
+    batch_size=32,
     shuffle=False,
     num_workers=4,
     pin_memory=True,
@@ -113,8 +113,6 @@ def train_denoiser(
     scheduler_params = kwargs.get("scheduler_params", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
-    tqdm_enabled = kwargs.get("tqdm_enabled", True)
-    tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
 
     scheduler = None
     if scheduler_params:
@@ -157,7 +155,7 @@ def train_denoiser(
             current_lr = None
             new_lr = False
 
-        pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
         with pbar:
@@ -211,12 +209,18 @@ def train_denoiser(
         epoch_loss = torch.stack(batch_losses).mean().item()
         train_loss_list.append(epoch_loss)
 
+        if not TQDM_FLAG:
+            line0 = f"Epoch {epoch + 1}/{epochs}"
+            if current_lr is not None:
+                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+            print(line0)
+            line = f"Train Loss: {epoch_loss:.{precision}e}"
+
         # --- Validation ---
         if val_loader:
             val_loss = validation_loss_denoiser(
                 model,
                 val_loader,
-                sigma_dict,
                 device=device,
             )
             val_loss_list.append(val_loss)
@@ -240,8 +244,16 @@ def train_denoiser(
             }
             pbar.set_postfix(pfix)
 
+            if not TQDM_FLAG:
+                marker = "BEST" if is_best else ""
+                line += f" | Val Loss: {val_loss:.{precision}f} {marker}"
+
         else:
             best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+        if not TQDM_FLAG:
+            print(line)
+            print("-" * 50)
 
         # --- Save checkpoint ---
         if filename:
@@ -263,8 +275,9 @@ def train_denoiser(
                     checkpoint_data["scheduler_state_dict"] = copy.deepcopy(
                         scheduler.state_dict()
                     )
+                time_elapsed = time_string(time.time() - start_time)
                 print(
-                    f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1}"
+                    f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1} at {time_elapsed}"
                 )
                 save_ckp(**checkpoint_data)
 
@@ -328,7 +341,6 @@ def predict_denoiser(
     device,
     print_stats=True,
     n=5,
-    tqdm_enabled=True,
     sigma_dict=SIGMA_DICT,
 ):
     """
@@ -350,7 +362,7 @@ def predict_denoiser(
     sigma_all = []
 
     with torch.inference_mode():
-        pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(TQDM_FLAG, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:
             for clean_batch in val_loader:
@@ -472,8 +484,28 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     optimizer=optimizer,
     scheduler_params=scheduler_params,
     save_freq=1,
+    tqdm_enabled=False,
 )
 
 
 # %% Test
-metrics = predict_denoiser(model, best_weights, val_loader, device=device)
+checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)
+best_weights = checkpoint["best_weights"]
+val_loss = checkpoint["val_loss_list"]
+train_loss = checkpoint["train_loss_list"]
+
+plot_losses(
+    [train_loss, val_loss],
+    labels=["Train", "Validation"],
+    skip=0,
+    logscale=True,
+)
+
+plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)
+
+metrics = predict_denoiser(
+    model,
+    best_weights,
+    val_loader,
+    device=device,
+)

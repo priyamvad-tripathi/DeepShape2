@@ -29,6 +29,8 @@ DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
 TQDM_FLAG = cfg["TQDM"]
 
+BATCH_SIZE = 32
+
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + "denoiser_isolated.pt"
 
@@ -67,7 +69,7 @@ val_dataset = DenoiseDataset(
 # Initialize DataLoaders
 train_loader = DataLoader(
     train_dataset,
-    batch_size=32,
+    batch_size=BATCH_SIZE,
     shuffle=True,
     num_workers=4,
     pin_memory=True,
@@ -76,7 +78,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=32,
+    batch_size=BATCH_SIZE,
     shuffle=False,
     num_workers=4,
     pin_memory=True,

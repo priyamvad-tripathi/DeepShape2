@@ -60,7 +60,7 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:10], group_names[10:11]
+group_names_train, group_names_val = group_names[:40], group_names[40:41]
 
 # Split into train and validation sets
 train_dataset = DenoiseDataset(
@@ -78,29 +78,56 @@ val_dataset = DenoiseDataset(
 )
 
 
+class DistributedRandomSubsetSampler(DistributedSampler):
+    def __init__(self, dataset, subset_size, num_replicas=None, rank=None):
+        super().__init__(
+            dataset,
+            num_replicas=num_replicas,
+            rank=rank,
+            shuffle=True,
+            drop_last=False,
+        )
+        self.subset_size = subset_size
+
+    def __iter__(self):
+        # 1. shuffle whole dataset
+        indices = torch.randperm(len(self.dataset))
+
+        # 2. pick subset
+        indices = indices[: self.subset_size]
+
+        # 3. shard across GPUs (same logic as DistributedSampler)
+        indices = indices.tolist()
+
+        # add extra if not divisible
+        extra = self.total_size - len(indices)
+        if extra > 0:
+            indices += indices[:extra]
+
+        # split for this rank
+        offset = self.num_samples * self.rank
+        return iter(indices[offset : offset + self.num_samples])
+
+
 def get_data_loaders(
     batch_size,
     rank,
     world_size,
 ):
-    train_sampler = DistributedSampler(
-        train_dataset, num_replicas=world_size, rank=rank, shuffle=True
-    )
-    val_sampler = DistributedSampler(
-        val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+    sampler = DistributedRandomSubsetSampler(
+        train_dataset, subset_size=100000, num_replicas=world_size, rank=rank
     )
 
     train_loader = DataLoader(
         train_dataset,
-        batch_size=BATCH_SIZE,
-        sampler=train_sampler,
+        batch_size=batch_size,
+        sampler=sampler,
         num_workers=4,
         pin_memory=True,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=BATCH_SIZE,
-        sampler=val_sampler,
+        batch_size=batch_size,
         num_workers=4,
         pin_memory=True,
     )
@@ -115,6 +142,12 @@ def process_batch(clean_batch, device):
     # Move to device; ensure float
     clean = clean_batch.to(device, non_blocking=True).float()
     N = clean.size(0)
+
+    # optional random rotation / flip
+    if torch.rand(1) < 0.5:
+        clean = clean.flip(-1)
+    if torch.rand(1) < 0.5:
+        clean = clean.flip(-2)
 
     # Random PSNR target per sample
     target_psnr = torch.rand(N, device=device) * 49.5 + 0.5  # range [0.5, 50]
@@ -489,7 +522,7 @@ def main_worker(rank, world_size):
 
     # data
     train_loader, val_loader = get_data_loaders(
-        batch=BATCH_SIZE, rank=rank, world_size=world_size
+        batch_size=BATCH_SIZE, rank=rank, world_size=world_size
     )
 
     filename = loc_weights if rank == 0 else None

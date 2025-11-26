@@ -53,14 +53,14 @@ def cleanup():
 
 # %% Denoiser Model Setup and data
 SIGMA = 0.71e-06
-NITER = 30
+NITER = 10
 SIGMA_VALS = np.geomspace(2 * SIGMA, 0.1 * SIGMA, NITER)
 SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:40], group_names[40:41]
+group_names_train, group_names_val = group_names[:10], group_names[10:11]
 
 # Split into train and validation sets
 train_dataset = DenoiseDataset(

@@ -124,7 +124,7 @@ def get_data_loaders(
     world_size,
 ):
     sampler = DistributedRandomSubsetSampler(
-        train_dataset, subset_size=100000, num_replicas=world_size, rank=rank
+        len(train_dataset), subset_size=100000, num_replicas=world_size, rank=rank
     )
 
     train_loader = DataLoader(

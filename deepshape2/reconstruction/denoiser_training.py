@@ -1,12 +1,14 @@
 # %%Import Libraries
 import copy
+import os
 import time
 
 import numpy as np
 import torch
-from colorist import Color
+import torch.distributed as dist
 from deepinv.models import DRUNet
-from torch.utils.data import DataLoader
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data import DataLoader, DistributedSampler
 
 from deepshape2.data.loaders import DenoiseDataset
 from deepshape2.models import RefineNet
@@ -21,7 +23,7 @@ from deepshape2.utils import (
     set_seed,
     time_string,
 )
-from deepshape2.visualization import plot, plot_losses
+from deepshape2.visualization import plot
 
 # %% Defaults and Configurations
 cfg = load_config()
@@ -40,6 +42,18 @@ set_seed()
 lr_init = 1e-3
 
 tqdm_kwargs = get_tqdm()
+
+
+# %% Distributed Training Setup
+def setup(rank, world_size):
+    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    torch.cuda.set_device(rank)
+
+
+def cleanup():
+    dist.destroy_process_group()
+
+
 # %% Denoiser Model Setup and data
 SIGMA = 0.71e-06
 NITER = 30
@@ -66,29 +80,37 @@ val_dataset = DenoiseDataset(
     groups=group_names_val,
 )
 
-# Initialize DataLoaders
-train_loader = DataLoader(
-    train_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=True,
-    num_workers=4,
-    pin_memory=True,
-    drop_last=True,
-)
 
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=4,
-    pin_memory=True,
-    drop_last=True,
-)
+def get_data_loaders(
+    batch_size,
+    rank,
+    world_size,
+):
+    train_sampler = DistributedSampler(
+        train_dataset, num_replicas=world_size, rank=rank, shuffle=True
+    )
+    val_sampler = DistributedSampler(
+        val_dataset, num_replicas=world_size, rank=rank, shuffle=False
+    )
+
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=train_sampler,
+        num_workers=4,
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=BATCH_SIZE,
+        sampler=val_sampler,
+        num_workers=4,
+        pin_memory=True,
+    )
+
+    return train_loader, val_loader
 
 
-model = RefineNet(n_noise_scale=len(SIGMA_DICT))
-model = model.to(device)
-# model = torch.compile(model)
 # %% Define Training and Testing Function
 
 
@@ -151,7 +173,10 @@ def train_denoiser(
             optimizer, **scheduler_params
         )
 
-    print(f"Running on device: {device}")
+    rank = dist.get_rank() if dist.is_initialized() else 0
+
+    if rank == 0:
+        print(f"Running on device: {device}")
 
     # --- Load checkpoint ---
     try:
@@ -164,9 +189,11 @@ def train_denoiser(
         lr_list = checkpoint.get("lr_list", [])
         if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
-        print(f"Loaded checkpoint from epoch {current_epoch}")
+        if rank == 0:
+            print(f"Loaded checkpoint from epoch {current_epoch}")
     except (AttributeError, FileNotFoundError, TypeError):
-        print("No saved checkpoints found. Starting from scratch.")
+        if rank == 0:
+            print("No saved checkpoints found. Starting from scratch.")
 
     # --- Training loop ---
     mse = torch.nn.MSELoss()
@@ -174,6 +201,12 @@ def train_denoiser(
     for epoch in range(epochs):
         if epoch < current_epoch:
             continue
+
+        # DDP requirement for shuffling with DistributedSampler
+        if isinstance(
+            train_loader.sampler, torch.utils.data.distributed.DistributedSampler
+        ):
+            train_loader.sampler.set_epoch(epoch)
 
         model.train()
         batch_losses = []
@@ -186,87 +219,61 @@ def train_denoiser(
             current_lr = None
             new_lr = False
 
-        pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
-        pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
+        for clean_batch in train_loader:
+            # Prepare batch
+            noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
 
-        with pbar:
-            for clean_batch in train_loader:
-                # Prepare batch
-                noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
+            # ---------------------------
+            # Model forward + loss
+            # ---------------------------
+            optimizer.zero_grad(set_to_none=True)
+            denoise = model(noisy, sigma_idx)
+            loss = mse(denoise, clean) * 1e12
 
-                # ---------------------------
-                # Model forward + loss
-                # ---------------------------
-                optimizer.zero_grad(set_to_none=True)
-                denoise = model(noisy, sigma_idx)
-                loss = mse(denoise, clean) * 1e12
+            loss.backward()
+            optimizer.step()
 
-                loss.backward()
-                optimizer.step()
-
-                # Logging
-                batch_losses.append(loss.detach().cpu())
-
-                postfix = {
-                    "Train Loss": f"{torch.stack(batch_losses).mean():.{precision}e}",
-                }
-                if current_lr is not None:
-                    postfix["LR"] = (
-                        f"{Color.RED}{current_lr:.2e}{Color.OFF}"
-                        if new_lr
-                        else f"{current_lr:.2e}"
-                    )
-
-                pbar.update(1)
-                pbar.set_postfix(postfix)
+            # Logging
+            batch_losses.append(loss.detach().cpu())
 
         # --- End of Epoch ---
         epoch_loss = torch.stack(batch_losses).mean().item()
         train_loss_list.append(epoch_loss)
 
-        if not TQDM_FLAG:
-            line0 = f"Epoch {epoch + 1}/{epochs}"
-            if current_lr is not None:
-                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+        line0 = f"Epoch {epoch + 1}/{epochs}"
+        if current_lr is not None:
+            line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+        if rank == 0:
             print(line0)
-            line = f"Train Loss: {epoch_loss:.{precision}e}"
+        line = f"Train Loss: {epoch_loss:.{precision}e}"
 
         # --- Validation ---
-        if val_loader:
-            val_loss = validation_loss_denoiser(
-                model,
-                val_loader,
-                device=device,
+        val_loss = validation_loss_denoiser(
+            model,
+            val_loader,
+            device=device,
+        )
+        val_loss_list.append(val_loss)
+
+        if scheduler:
+            scheduler.step(val_loss)
+
+        is_best = val_loss < best_val_loss
+        if is_best:
+            best_epoch = epoch
+            best_val_loss = val_loss
+
+            real_state = (
+                model.module.state_dict()
+                if hasattr(model, "module")
+                else model.state_dict()
             )
-            val_loss_list.append(val_loss)
+            best_weights = {k: v.cpu() for k, v in real_state.items()}
 
-            if scheduler:
-                scheduler.step(val_loss)
+            marker = "BEST" if is_best else ""
+            line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
 
-            is_best = val_loss < best_val_loss
-            if is_best:
-                best_epoch = epoch
-                best_val_loss = val_loss
-                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
-
-            pfix = {
-                "Train Loss": f"{epoch_loss:.{precision}e}",
-                "Val Loss": (
-                    f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
-                    if is_best
-                    else f"{val_loss:.{precision}e}"
-                ),
-            }
-            pbar.set_postfix(pfix)
-
-            if not TQDM_FLAG:
-                marker = "BEST" if is_best else ""
-                line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
-
-        else:
-            best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
-
-        if not TQDM_FLAG:
+        if rank == 0:
             print(line)
             print("-" * 50)
 
@@ -291,15 +298,16 @@ def train_denoiser(
                         scheduler.state_dict()
                     )
                 time_elapsed = time_string(time.time() - start_time)
-                print(
-                    f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1} at {time_elapsed}"
-                )
-                save_ckp(**checkpoint_data)
+                if rank == 0:
+                    print(
+                        f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1} at {time_elapsed}"
+                    )
+                    save_ckp(**checkpoint_data)
 
     # Summary
     total_time = time.time() - start_time
-    print("-" * 50)
-    if val_loader:
+    if rank == 0:
+        print("=" * 50)
         best_idx = val_loss_list.index(min(val_loss_list))
         print(
             f"Training completed in {time_string(total_time)}\n"
@@ -307,15 +315,8 @@ def train_denoiser(
             f"MSE: Train={train_loss_list[best_epoch]:.{precision}f}, "
             f"Val={val_loss_list[best_epoch]:.{precision}f}\n"
         )
-    else:
-        best_idx = train_loss_list.index(min(train_loss_list))
-        print(
-            f"Training completed in {time_string(total_time)}\n"
-            f"Best Training Loss Epoch {best_idx + 1}: {min(train_loss_list):.{precision}f}"
-        )
-
-    print(f"Save path: {filename}")
-    print("-" * 50)
+        print(f"Save path: {filename}")
+        print("-" * 50)
 
     return best_weights, train_loss_list, val_loss_list
 
@@ -477,52 +478,77 @@ def predict_denoiser(
     return metrics
 
 
-# %% Train the model and plot results
+# %%
+def main_worker(rank, world_size):
+    setup(rank, world_size)
+    device = torch.device(f"cuda:{rank}")
 
-n_epochs = 201
+    # model
+    model = RefineNet(n_noise_scale=len(SIGMA_DICT))
+    model = model.to(device)
+    model = DDP(model, device_ids=[rank])
 
-scheduler_params = {"factor": 0.5, "patience": 25, "min_lr": lr_init / (2**5)}
+    # data
+    train_loader, val_loader = get_data_loaders(
+        batch=BATCH_SIZE, rank=rank, world_size=world_size
+    )
+
+    filename = loc_weights if rank == 0 else None
+
+    n_epochs = 201
+
+    scheduler_params = {"factor": 0.5, "patience": 25, "min_lr": lr_init / (2**5)}
+
+    optimizer = torch.optim.Adam(
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=lr_init,
+        weight_decay=lr_init,
+    )
+
+    best_weights, _, _ = train_denoiser(
+        model,
+        train_loader,
+        val_loader,
+        epochs=n_epochs,
+        optimizer=optimizer,
+        device=device,
+        filename=filename,
+        scheduler_params=scheduler_params,
+        rank=rank,
+    )
+
+    # % Test
+    # checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)
+    # best_weights = checkpoint["best_weights"]
+    # val_loss = checkpoint["val_loss_list"]
+    # train_loss = checkpoint["train_loss_list"]
+
+    # plot_losses(
+    #     [train_loss, val_loss],
+    #     labels=["Train", "Validation"],
+    #     skip=0,
+    #     logscale=True,
+    # )
+
+    # plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)
+
+    if rank == 0:
+        _ = predict_denoiser(
+            model,
+            best_weights,
+            val_loader,
+            device=device,
+        )
+
+    cleanup()
 
 
-optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=lr_init,
-    weight_decay=lr_init,
-)
+# %% Main function for distributed training
+def main():
+    rank = int(os.environ["RANK"])
+    world_size = int(os.environ["WORLD_SIZE"])
+    main_worker(rank, world_size)
 
 
-best_weights, train_loss_list, val_loss_list = train_denoiser(
-    model,
-    train_loader,
-    val_loader,
-    epochs=n_epochs,
-    device=device,
-    filename=loc_weights,
-    optimizer=optimizer,
-    scheduler_params=scheduler_params,
-    save_freq=1,
-    tqdm_enabled=False,
-)
-
-
-# %% Test
-checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)
-best_weights = checkpoint["best_weights"]
-val_loss = checkpoint["val_loss_list"]
-train_loss = checkpoint["train_loss_list"]
-
-plot_losses(
-    [train_loss, val_loss],
-    labels=["Train", "Validation"],
-    skip=0,
-    logscale=True,
-)
-
-plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)
-
-metrics = predict_denoiser(
-    model,
-    best_weights,
-    val_loader,
-    device=device,
-)
+if __name__ == "__main__":
+    main()

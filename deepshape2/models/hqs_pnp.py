@@ -87,11 +87,7 @@ DEF_f2 = 1.9979
 DEF_falpha = 3.9949
 
 # Predefined locations to check for weights
-WEIGHT_PATHS = [
-    cfg["GENCI_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
-    # cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth",
-    cfg["MODEL_DIR"] + " drunet_gray.pth",
-]
+WEIGHT_PATH = cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth"
 
 
 def resolve_pretrained_path():
@@ -99,9 +95,8 @@ def resolve_pretrained_path():
     Returns the first existing weight file path from predefined locations.
     If none exists, returns 'download' to automatically download weights.
     """
-    for path in WEIGHT_PATHS:
-        if path and os.path.exists(path):
-            return path
+    if os.path.exists(WEIGHT_PATH):
+        return WEIGHT_PATH
     return "download"
 
 

@@ -5,6 +5,7 @@ import time
 import numpy as np
 import torch
 from colorist import Color
+from deepinv.models import DRUNet
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import DenoiseDataset
@@ -18,7 +19,6 @@ from deepshape2.utils import (
     psnr_torch,
     save_ckp,
     set_seed,
-    ssim_batch,
     time_string,
 )
 from deepshape2.visualization import plot, plot_losses
@@ -49,7 +49,7 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 
-group_names_train, group_names_val = group_names[:40], group_names[40:45]
+group_names_train, group_names_val = group_names[:40], group_names[40:41]
 
 # Split into train and validation sets
 train_dataset = DenoiseDataset(
@@ -90,6 +90,35 @@ model = RefineNet(n_noise_scale=len(SIGMA_DICT))
 model = model.to(device)
 # model = torch.compile(model)
 # %% Define Training and Testing Function
+
+
+def process_batch(clean_batch, device):
+    # Move to device; ensure float
+    clean = clean_batch.to(device, non_blocking=True).float()
+    N = clean.size(0)
+
+    # Random PSNR target per sample
+    target_psnr = torch.rand(N, device=device) * 49.5 + 0.5  # range [0.5, 50]
+    peak = clean.abs().amax(dim=(1, 2, 3))  # shape (N,)
+
+    # Choose sigma values from dictionary (indices sampled uniformly)
+    sigma_idx = torch.randint(
+        0, len(SIGMA_DICT), size=(N,), device=device, dtype=torch.long
+    )
+
+    # Convert selected sigma values to a tensor
+    sigma_vals = torch.tensor(
+        [SIGMA_DICT[int(i)] for i in sigma_idx.cpu()], device=device, dtype=clean.dtype
+    ).view(N, 1, 1, 1)
+
+    # Correct scaling factor
+    scale = (target_psnr / peak).view(N, 1, 1, 1) * sigma_vals
+    clean_scaled = clean * scale
+
+    # Add noise
+    noisy = clean_scaled + torch.randn_like(clean_scaled) * sigma_vals
+
+    return noisy.float(), clean_scaled.float(), sigma_idx, target_psnr, sigma_vals
 
 
 def train_denoiser(
@@ -162,31 +191,15 @@ def train_denoiser(
 
         with pbar:
             for clean_batch in train_loader:
-                clean = clean_batch.to(device, non_blocking=True).float()
-                N = clean.size(0)
-
-                # ---------------------------
-                # Noise generation on GPU
-                # ---------------------------
-                sigma_idx = torch.randint(
-                    0, len(sigma_dict), size=(N,), device=device, dtype=torch.long
-                )
-
-                sigma_vals = torch.tensor(
-                    [sigma_dict[int(i)] for i in sigma_idx.cpu()],
-                    device=device,
-                ).view(N, 1, 1, 1)
-
-                noise = torch.randn_like(clean) * sigma_vals
-                noisy = clean + noise
-                noisy = noisy.float()
+                # Prepare batch
+                noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
 
                 # ---------------------------
                 # Model forward + loss
                 # ---------------------------
                 optimizer.zero_grad(set_to_none=True)
                 denoise = model(noisy, sigma_idx)
-                loss = mse(denoise, clean)
+                loss = mse(denoise, clean) * 1e12
 
                 loss.backward()
                 optimizer.step()
@@ -248,7 +261,7 @@ def train_denoiser(
 
             if not TQDM_FLAG:
                 marker = "BEST" if is_best else ""
-                line += f" | Val Loss: {val_loss:.{precision}f} {marker}"
+                line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
 
         else:
             best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -314,23 +327,12 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
     losses = []
 
     for clean_batch in val_loader:
-        clean = clean_batch.to(device, non_blocking=True).float()
-        N = clean.size(0)
-
-        sigma_idx = torch.randint(
-            0, len(sigma_dict), size=(N,), device=device, dtype=torch.long
-        )
-        sigma_vals = torch.tensor(
-            [sigma_dict[int(i)] for i in sigma_idx.cpu()],
-            device=device,
-        ).view(N, 1, 1, 1)
-
-        noisy = clean + torch.randn_like(clean) * sigma_vals
-        noisy = noisy.float()
+        # Prepare batch
+        noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
 
         denoise = model(noisy, sigma_idx)
 
-        loss = mse(denoise, clean)
+        loss = mse(denoise, clean) * 1e12
         losses.append(loss.detach().cpu())
 
     return torch.stack(losses).mean().item()
@@ -362,67 +364,81 @@ def predict_denoiser(
     out_all = []
     psnr_all = []
     sigma_all = []
+    out_all_2 = []
+    psnr_all_2 = []
+
+    model2 = DRUNet(
+        in_channels=1,
+        out_channels=1,
+        pretrained=MODEL_DIR + "drunet_deepinv_gray_finetune_26k.pth",
+        device=device,
+    )
+    model2 = model2.eval()
 
     with torch.inference_mode():
         pbar = get_progress_bar(TQDM_FLAG, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:
-            for clean_batch in val_loader:
+            for nc, clean_batch in enumerate(val_loader):
+                if nc > 5:
+                    continue
                 pbar.update(1)
 
-                clean = clean_batch.to(device, non_blocking=True).float()
-                N = clean.size(0)
-
-                sigma_idx = torch.randint(
-                    0, len(sigma_dict), size=(N,), device=device, dtype=torch.long
+                noisy, clean, sigma_idx, target_psnr, sigma_vals = process_batch(
+                    clean_batch, device
                 )
-                sigma_vals = torch.tensor(
-                    [sigma_dict[int(i)] for i in sigma_idx.cpu()],
-                    device=device,
-                ).view(N, 1, 1, 1)
-                sigma_all.append(sigma_vals.cpu().numpy().squeeze())
-
-                noisy = clean + torch.randn_like(clean) * sigma_vals
-                noisy = noisy.float()
-
-                sigma_idx = sigma_idx.to(device, non_blocking=True)
+                sigma_all.append(target_psnr.cpu().numpy())
 
                 # Forward pass
                 out = model(noisy, sigma_idx)
                 if isinstance(out, (tuple, list)):
                     out = out[0]
 
+                out2 = model2(noisy, sigma_vals.squeeze().float())
+
                 # Accumulate tensors
-                clean_all.append(clean.cpu().numpy())
-                noisy_all.append(noisy.cpu().numpy())
-                out_all.append(out.cpu().numpy())
+                clean_all.append(clean.cpu().numpy().squeeze())
+                noisy_all.append(noisy.cpu().numpy().squeeze())
+                out_all.append(out.cpu().numpy().squeeze())
+                out_all_2.append(out2.cpu().numpy().squeeze())
 
                 # Metrics on GPU
                 psnr_batch = psnr_torch(clean, out).cpu().numpy()
+                psnr_batch_2 = psnr_torch(clean, out2).cpu().numpy()
 
                 psnr_all.append(psnr_batch)
+                psnr_all_2.append(psnr_batch_2)
 
     # ---- Move to CPU once ---- #
     clean_all = np.concatenate(clean_all)
     noisy_all = np.concatenate(noisy_all)
     out_all = np.concatenate(out_all)
+    out_all_2 = np.concatenate(out_all_2)
     psnr_all = np.concatenate(psnr_all)
-    sigma_all = np.concatenate(sigma_all) / SIGMA
+    psnr_all_2 = np.concatenate(psnr_all_2)
+    sigma_all = np.concatenate(sigma_all)
 
-    ssim_all = ssim_batch(clean_all, out_all)
+    # ssim_all = ssim_batch(clean_all, out_all)
 
     # ---- Print stats ---- #
     if print_stats:
+        print("Refinenet:")
         print(
             f"PSNR  Mean {psnr_all.mean():.03f} | "
             f"Min {psnr_all.min():.03f} | "
             f"Max {psnr_all.max():.03f}"
         )
+        print("DRUNet:")
         print(
-            f"SSIM  Mean {ssim_all.mean():.03f} | "
-            f"Min {ssim_all.min():.03f} | "
-            f"Max {ssim_all.max():.03f}"
+            f"PSNR  Mean {psnr_all_2.mean():.03f} | "
+            f"Min {psnr_all_2.min():.03f} | "
+            f"Max {psnr_all_2.max():.03f}"
         )
+        # print(
+        #     f"SSIM  Mean {ssim_all.mean():.03f} | "
+        #     f"Min {ssim_all.min():.03f} | "
+        #     f"Max {ssim_all.max():.03f}"
+        # )
 
     # ---- Build metrics dict ---- #
     metrics = {
@@ -430,7 +446,9 @@ def predict_denoiser(
         "noisy": noisy_all,
         "denoised": out_all,
         "psnr": psnr_all,
-        "ssim": ssim_all,
+        "denoised_2": out_all_2,
+        "psnr_2": psnr_all_2,
+        # "ssim": ssim_all,
     }
 
     # ---- Plotting ---- #
@@ -442,20 +460,17 @@ def predict_denoiser(
                 clean_all[inds],
                 noisy_all[inds],
                 out_all[inds],
-                clean_all[inds] - out_all[inds],
+                out_all_2[inds],
             ],
-            caption=["True", "Noisy", "Denoised", "Residual"],
+            caption=["True", "Noisy", "Refinenet", "DRUNet"],
             cbar=True,
-            scale_row=0,
-            same_scale=[0, 1, 2],
+            # scale_row=0,
+            # same_scale=[0, 1, 2],
             subtitles=[
                 [None] * n,
-                [rf"{s:.03f}$\sigma$" for s in sigma_all[inds]],
-                [
-                    f"{s:.03f}/{p:.02f} dB"
-                    for s, p in zip(ssim_all[inds], psnr_all[inds])
-                ],
-                [None] * n,
+                [f"{s:.02f}" for s in sigma_all[inds]],
+                [f"{p:.02f} dB" for p in psnr_all[inds]],
+                [f"{p:.02f} dB" for p in psnr_all_2[inds]],
             ],
         )
 

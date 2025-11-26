@@ -8,7 +8,7 @@ import torch
 import torch.distributed as dist
 from deepinv.models import DRUNet
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.utils.data import DataLoader, DistributedSampler
+from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import DenoiseDataset
 from deepshape2.models import RefineNet
@@ -78,35 +78,44 @@ val_dataset = DenoiseDataset(
 )
 
 
-class DistributedRandomSubsetSampler(DistributedSampler):
-    def __init__(self, dataset, subset_size, num_replicas=None, rank=None):
-        super().__init__(
-            dataset,
-            num_replicas=num_replicas,
-            rank=rank,
-            shuffle=True,
-            drop_last=False,
-        )
+class DistributedRandomSubsetSampler(torch.utils.data.Sampler):
+    def __init__(
+        self, dataset_size, subset_size, num_replicas=None, rank=None, shuffle=True
+    ):
+        if num_replicas is None:
+            num_replicas = dist.get_world_size()
+        if rank is None:
+            rank = dist.get_rank()
+
+        self.dataset_size = dataset_size
         self.subset_size = subset_size
+        self.num_replicas = num_replicas
+        self.rank = rank
+        self.shuffle = shuffle
+
+        # number of samples per rank
+        self.num_samples = subset_size // num_replicas
+        self.total_size = self.num_samples * num_replicas
 
     def __iter__(self):
-        # 1. shuffle whole dataset
-        indices = torch.randperm(len(self.dataset))
+        # pick subset
+        indices = torch.randperm(self.dataset_size)[: self.subset_size]
 
-        # 2. pick subset
-        indices = indices[: self.subset_size]
+        if self.shuffle:
+            indices = indices[torch.randperm(len(indices))]
 
-        # 3. shard across GPUs (same logic as DistributedSampler)
+        # ensure divisible
         indices = indices.tolist()
+        if len(indices) < self.total_size:
+            indices += indices[: self.total_size - len(indices)]
 
-        # add extra if not divisible
-        extra = self.total_size - len(indices)
-        if extra > 0:
-            indices += indices[:extra]
+        # shard
+        start = self.rank * self.num_samples
+        end = start + self.num_samples
+        return iter(indices[start:end])
 
-        # split for this rank
-        offset = self.num_samples * self.rank
-        return iter(indices[offset : offset + self.num_samples])
+    def __len__(self):
+        return self.num_samples
 
 
 def get_data_loaders(
@@ -122,7 +131,7 @@ def get_data_loaders(
         train_dataset,
         batch_size=batch_size,
         sampler=sampler,
-        num_workers=4,
+        num_workers=8,
         pin_memory=True,
     )
     val_loader = DataLoader(

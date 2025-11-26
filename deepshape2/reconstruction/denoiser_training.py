@@ -13,7 +13,6 @@ from torch.utils.data import DataLoader, DistributedSampler
 from deepshape2.data.loaders import DenoiseDataset
 from deepshape2.models import RefineNet
 from deepshape2.utils import (
-    get_freest_gpu,
     get_progress_bar,
     get_tqdm,
     load_ckp,
@@ -36,8 +35,6 @@ BATCH_SIZE = 30
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + "denoiser_isolated.pt"
 
-device = get_freest_gpu(set_device=True)
-set_seed()
 
 lr_init = 1e-3
 
@@ -480,6 +477,8 @@ def predict_denoiser(
 
 # %%
 def main_worker(rank, world_size):
+    set_seed()
+
     setup(rank, world_size)
     device = torch.device(f"cuda:{rank}")
 

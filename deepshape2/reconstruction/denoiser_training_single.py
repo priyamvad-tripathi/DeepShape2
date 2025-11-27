@@ -212,9 +212,18 @@ def train_denoiser(
                 # ---------------------------
                 optimizer.zero_grad(set_to_none=True)
                 denoise = model(noisy, sigma_idx)
-                loss = mse(denoise * 1e6, clean * 1e6)
+                loss = mse(denoise, clean) * 1e12
 
                 loss.backward()
+
+                # Compute gradient norm
+                total_norm = 0.0
+                for p in model.parameters():
+                    if p.grad is not None:
+                        param_norm = p.grad.data.norm(2)
+                        total_norm += param_norm.item() ** 2
+                total_norm = total_norm**0.5
+
                 optimizer.step()
                 if scheduler:
                     scheduler.step()
@@ -224,6 +233,7 @@ def train_denoiser(
 
                 postfix = {
                     "Train Loss": f"{torch.stack(batch_losses).mean():.{precision}e}",
+                    "Grad Norm": f"{total_norm:.2e}",
                 }
                 if current_lr is not None:
                     postfix["LR"] = (
@@ -244,7 +254,7 @@ def train_denoiser(
                 if current_lr is not None:
                     line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
                 print(line0)
-                line = f"Train Loss: {epoch_loss:.{precision}e}"
+                line = f"Train Loss: {epoch_loss:.{precision}e} | Grad Norm: {total_norm:.2e} | "
 
             # --- Validation ---
             if val_loader:
@@ -263,6 +273,7 @@ def train_denoiser(
 
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
+                    "Grad Norm": f"{total_norm:.2e}",
                     "Val Loss": (
                         f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
                         if is_best
@@ -344,7 +355,7 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
 
         denoise = model(noisy, sigma_idx)
 
-        loss = mse(denoise * 1e6, clean * 1e6)
+        loss = mse(denoise, clean) * 1e12
         losses.append(loss.detach().cpu())
 
     return torch.stack(losses).mean().item()

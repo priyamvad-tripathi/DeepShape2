@@ -212,7 +212,7 @@ def train_denoiser(
                 # ---------------------------
                 optimizer.zero_grad(set_to_none=True)
                 denoise = model(noisy, sigma_idx)
-                loss = mse(denoise, clean) * 1e12
+                loss = mse(denoise * 1e6, clean * 1e6)
 
                 loss.backward()
                 optimizer.step()
@@ -344,7 +344,7 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
 
         denoise = model(noisy, sigma_idx)
 
-        loss = mse(denoise, clean) * 1e12
+        loss = mse(denoise * 1e6, clean * 1e6)
         losses.append(loss.detach().cpu())
 
     return torch.stack(losses).mean().item()

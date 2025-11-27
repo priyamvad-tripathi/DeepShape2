@@ -29,7 +29,7 @@ DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
 TQDM_FLAG = cfg["TQDM"]
 
-BATCH_SIZE = 30
+BATCH_SIZE = 8
 
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + "denoiser_isolated.pt"
@@ -155,15 +155,9 @@ def train_denoiser(
 
     # --- Config ---
     filename = kwargs.get("filename")
-    scheduler_params = kwargs.get("scheduler_params", None)
+    scheduler = kwargs.get("scheduler", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
-
-    scheduler = None
-    if scheduler_params:
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, **scheduler_params
-        )
 
     print(f"Running on device: {device}")
 
@@ -217,6 +211,8 @@ def train_denoiser(
 
                 loss.backward()
                 optimizer.step()
+                if scheduler:
+                    scheduler.step()
 
                 # Logging
                 batch_losses.append(loss.detach().cpu())
@@ -253,9 +249,6 @@ def train_denoiser(
                 device=device,
             )
             val_loss_list.append(val_loss)
-
-            if scheduler:
-                scheduler.step(val_loss)
 
             is_best = val_loss < best_val_loss
             if is_best:
@@ -505,6 +498,17 @@ optimizer = torch.optim.Adam(
 )
 
 
+def lr_lambda(step):
+    # step=0 => factor=1, step=100k => factor=0.5, etc.
+    factor = 0.5 ** (step // 100_000)
+    # enforce minimum LR
+    min_lr_factor = 5e-7 / 1e-4
+    return max(factor, min_lr_factor)
+
+
+scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+
+
 best_weights, train_loss_list, val_loss_list = train_denoiser(
     model,
     train_loader,
@@ -513,7 +517,7 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     device=device,
     filename=loc_weights,
     optimizer=optimizer,
-    scheduler_params=scheduler_params,
+    scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,
 )

@@ -235,52 +235,52 @@ def train_denoiser(
                 pbar.update(1)
                 pbar.set_postfix(postfix)
 
-        # --- End of Epoch ---
-        epoch_loss = torch.stack(batch_losses).mean().item()
-        train_loss_list.append(epoch_loss)
-
-        if not TQDM_FLAG:
-            line0 = f"Epoch {epoch + 1}/{epochs}"
-            if current_lr is not None:
-                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
-            print(line0)
-            line = f"Train Loss: {epoch_loss:.{precision}e}"
-
-        # --- Validation ---
-        if val_loader:
-            val_loss = validation_loss_denoiser(
-                model,
-                val_loader,
-                device=device,
-            )
-            val_loss_list.append(val_loss)
-
-            is_best = val_loss < best_val_loss
-            if is_best:
-                best_epoch = epoch
-                best_val_loss = val_loss
-                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
-
-            pfix = {
-                "Train Loss": f"{epoch_loss:.{precision}e}",
-                "Val Loss": (
-                    f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
-                    if is_best
-                    else f"{val_loss:.{precision}e}"
-                ),
-            }
-            pbar.set_postfix(pfix)
+            # --- End of Epoch ---
+            epoch_loss = torch.stack(batch_losses).mean().item()
+            train_loss_list.append(epoch_loss)
 
             if not TQDM_FLAG:
-                marker = "BEST" if is_best else ""
-                line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
+                line0 = f"Epoch {epoch + 1}/{epochs}"
+                if current_lr is not None:
+                    line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+                print(line0)
+                line = f"Train Loss: {epoch_loss:.{precision}e}"
 
-        else:
-            best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+            # --- Validation ---
+            if val_loader:
+                val_loss = validation_loss_denoiser(
+                    model,
+                    val_loader,
+                    device=device,
+                )
+                val_loss_list.append(val_loss)
 
-        if not TQDM_FLAG:
-            print(line)
-            print("-" * 50)
+                is_best = val_loss < best_val_loss
+                if is_best:
+                    best_epoch = epoch
+                    best_val_loss = val_loss
+                    best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+                pfix = {
+                    "Train Loss": f"{epoch_loss:.{precision}e}",
+                    "Val Loss": (
+                        f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
+                        if is_best
+                        else f"{val_loss:.{precision}e}"
+                    ),
+                }
+                pbar.set_postfix(pfix)
+
+                if not TQDM_FLAG:
+                    marker = "BEST" if is_best else ""
+                    line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
+
+            else:
+                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+            if not TQDM_FLAG:
+                print(line)
+                print("-" * 50)
 
         # --- Save checkpoint ---
         if filename:

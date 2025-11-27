@@ -527,7 +527,7 @@ def main_worker(rank, world_size):
     # model
     model = RefineNet(n_noise_scale=len(SIGMA_DICT))
     model = model.to(device)
-    model = DDP(model, device_ids=[rank], find_unused_parameters=True)
+    model = DDP(model, device_ids=[rank])
 
     # data
     train_loader, val_loader = get_data_loaders(

@@ -4,6 +4,27 @@ import torch.nn as nn
 __all__ = ["RefineNet"]
 
 
+class CondMLP(nn.Module):
+    def __init__(self, in_channels, n_noise_scale=10, hidden=64):
+        super().__init__()
+        # we take noise index -> learnable embedding -> MLP
+        self.embed = nn.Embedding(n_noise_scale, hidden)
+        self.mlp = nn.Sequential(
+            nn.Linear(hidden, hidden),
+            nn.ReLU(),
+            nn.Linear(hidden, in_channels * 3),  # gamma, beta, alpha
+        )
+
+    def forward(self, x, noise_scale_idx):
+        # x: (B, C, H, W), noise_scale_idx: (B,)
+        bsz, C = x.shape[0], x.shape[1]
+        e = self.embed(noise_scale_idx)  # (B, hidden)
+        out = self.mlp(e)  # (B, C*3)
+        out = out.view(bsz, 3, C, 1, 1)  # (B, 3, C, 1, 1)
+        gamma, beta, alpha = out[:, 0], out[:, 1], out[:, 2]  # each (B,C,1,1)
+        return gamma, beta, alpha
+
+
 class CondInstanceNorm(nn.Module):
     def __init__(self, in_channels, n_noise_scale=10, eps=1e-5):
         super().__init__()
@@ -17,12 +38,13 @@ class CondInstanceNorm(nn.Module):
         # noise_scale_idx: (batch_size)
         # gamma: (n_noise_scale, in_channels)
 
-        bsz = x.shape[0]
-        gamma = self.gamma[noise_scale_idx].view(
-            bsz, -1, 1, 1
-        )  # (bsz, in_channels, 1, 1)
-        beta = self.beta[noise_scale_idx].view(bsz, -1, 1, 1)
-        alpha = self.alpha[noise_scale_idx].view(bsz, -1, 1, 1)
+        # bsz = x.shape[0]
+        # gamma = self.gamma[noise_scale_idx].view(
+        #     bsz, -1, 1, 1
+        # )  # (bsz, in_channels, 1, 1)
+        # beta = self.beta[noise_scale_idx].view(bsz, -1, 1, 1)
+        # alpha = self.alpha[noise_scale_idx].view(bsz, -1, 1, 1)
+        gamma, beta, alpha = CondMLP(x, noise_scale_idx)
 
         mu = x.mean(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)
         var = x.var(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)

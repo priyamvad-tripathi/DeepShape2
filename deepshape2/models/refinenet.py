@@ -5,33 +5,59 @@ __all__ = ["RefineNet"]
 
 
 class CondMLP(nn.Module):
-    def __init__(self, in_channels, n_noise_scale=10, hidden=64):
+    """
+    Conditional MLP that maps sigma_idx (N,) into
+    per-channel gamma, beta, alpha of shape (N, C, 1, 1).
+    """
+
+    def __init__(self, channels, n_noise_scale=10, hidden=128):
         super().__init__()
-        # we take noise index -> learnable embedding -> MLP
+        self.channels = channels
+
+        # Learnable embedding for noise levels
         self.embed = nn.Embedding(n_noise_scale, hidden)
-        self.mlp = nn.Sequential(
+
+        self.net = nn.Sequential(
             nn.Linear(hidden, hidden),
-            nn.ReLU(),
-            nn.Linear(hidden, in_channels * 3),  # gamma, beta, alpha
+            nn.ELU(),
+            nn.Linear(hidden, channels * 3),  # gamma, beta, alpha
         )
 
     def forward(self, x, noise_scale_idx):
-        # x: (B, C, H, W), noise_scale_idx: (B,)
-        bsz, C = x.shape[0], x.shape[1]
-        e = self.embed(noise_scale_idx)  # (B, hidden)
-        out = self.mlp(e)  # (B, C*3)
-        out = out.view(bsz, 3, C, 1, 1)  # (B, 3, C, 1, 1)
-        gamma, beta, alpha = out[:, 0], out[:, 1], out[:, 2]  # each (B,C,1,1)
+        """
+        x: (N, C, H, W)
+        noise_scale_idx: (N,) long tensor
+        """
+
+        # Ensure correct dtype and shape
+        if noise_scale_idx.dim() != 1:
+            noise_scale_idx = noise_scale_idx.view(-1)
+
+        # (N, hidden)
+        e = self.embed(noise_scale_idx)
+
+        # (N, 3*C)
+        cond = self.net(e)
+
+        # Split into gamma, beta, alpha
+        gamma, beta, alpha = cond.chunk(3, dim=1)
+
+        # reshape to (N, C, 1, 1)
+        gamma = gamma.view(-1, self.channels, 1, 1)
+        beta = beta.view(-1, self.channels, 1, 1)
+        alpha = alpha.view(-1, self.channels, 1, 1)
+
         return gamma, beta, alpha
 
 
 class CondInstanceNorm(nn.Module):
     def __init__(self, in_channels, n_noise_scale=10, eps=0):
         super().__init__()
-        self.gamma = nn.Parameter(torch.ones(n_noise_scale, in_channels))
-        self.beta = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
-        self.alpha = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
+        # self.gamma = nn.Parameter(torch.ones(n_noise_scale, in_channels))
+        # self.beta = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
+        # self.alpha = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
         self.eps = eps
+        self.cond_mlp = CondMLP(in_channels, n_noise_scale=n_noise_scale)
 
     def forward(self, x, noise_scale_idx):
         # x: (batch_size, in_channels, height, width)
@@ -44,7 +70,7 @@ class CondInstanceNorm(nn.Module):
         # )  # (bsz, in_channels, 1, 1)
         # beta = self.beta[noise_scale_idx].view(bsz, -1, 1, 1)
         # alpha = self.alpha[noise_scale_idx].view(bsz, -1, 1, 1)
-        gamma, beta, alpha = CondMLP(x, noise_scale_idx)
+        gamma, beta, alpha = self.cond_mlp(x, noise_scale_idx)
 
         mu = x.mean(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)
         var = x.var(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)

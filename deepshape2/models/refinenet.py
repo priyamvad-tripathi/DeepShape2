@@ -26,7 +26,7 @@ class CondMLP(nn.Module):
 
 
 class CondInstanceNorm(nn.Module):
-    def __init__(self, in_channels, n_noise_scale=10, eps=1e-5):
+    def __init__(self, in_channels, n_noise_scale=10, eps=0):
         super().__init__()
         self.gamma = nn.Parameter(torch.ones(n_noise_scale, in_channels))
         self.beta = nn.Parameter(torch.zeros(n_noise_scale, in_channels))

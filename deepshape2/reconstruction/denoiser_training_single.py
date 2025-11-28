@@ -45,8 +45,8 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 CROP_SIZE = 96
 
 
-SCALE_FACTOR = 1e4  # To bring pixel values to order ~1
-
+SCALE_FACTOR = 1.25e-5  # To bring pixel values to order ~1
+PSF_FACTOR = 10.0  # To account for PSF scaling
 
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + f"denoiser_isolated_{CROP_SIZE}.pt"
@@ -70,6 +70,7 @@ train_dataset = DenoiseDataset(
     # key="blended_stamps",
     groups=group_names_train,
     crop=CROP_SIZE,
+    # min_flux=50e-06,
 )
 
 
@@ -79,6 +80,7 @@ val_dataset = DenoiseDataset(
     # key="blended_stamps",
     groups=group_names_val,
     crop=CROP_SIZE,
+    # min_flux=50e-06,
 )
 
 # Initialize DataLoaders
@@ -151,16 +153,21 @@ def process_batch(clean_batch, device):
     ).view(N, 1, 1, 1)
 
     # Correct scaling factor
-    # scale = (target_psnr / peak).view(N, 1, 1, 1) * sigma_vals
-    # clean_scaled = clean * scale
-    clean_scaled = clean * 10  # To account for PSF scaling
+    clean_scaled = clean * PSF_FACTOR  # To account for PSF scaling
+    # Boost images to ensure minimum PSNR
+    peak = clean_scaled.abs().amax(dim=(1, 2, 3))
+    boost = torch.clamp(
+        (5 * sigma_vals.flatten()) / peak, min=1.0
+    )  # PSNR of at least 5
+    boost = boost.view(N, 1, 1, 1)
+    clean_scaled = clean_scaled * boost
 
     # Add noise
     noisy = clean_scaled + torch.randn_like(clean_scaled) * sigma_vals
 
     return (
-        noisy.float() * SCALE_FACTOR,
-        clean_scaled.float() * SCALE_FACTOR,
+        (noisy / SCALE_FACTOR).float(),
+        (clean_scaled / SCALE_FACTOR).float(),
         sigma_idx,
         sigma_vals,
     )
@@ -453,20 +460,20 @@ def predict_denoiser(
                 pbar.update(1)
 
                 noisy, clean, sigma_idx, sigma_vals = process_batch(clean_batch, device)
-                target_psnr = sigma_vals.view(-1).cpu().numpy() / SIGMA
-                sigma_all.append(target_psnr)
+                peaks = clean.amax(dim=(1, 2, 3)).cpu().numpy() * SCALE_FACTOR
+                sigma_all.append(peaks / (sigma_vals.squeeze().cpu().numpy()))
 
                 # Forward pass
                 noise = model(noisy, sigma_idx)
                 out = noisy - noise
 
-                out2 = model2(noisy, sigma_vals.squeeze().float())
+                out2 = model2(noisy, sigma_vals.squeeze().float() / SCALE_FACTOR)
 
                 # Inverse scaling
-                out = out / SCALE_FACTOR
-                out2 = out2 / SCALE_FACTOR
-                noisy = noisy / SCALE_FACTOR
-                clean = clean / SCALE_FACTOR
+                out = out * SCALE_FACTOR
+                out2 = out2 * SCALE_FACTOR
+                noisy = noisy * SCALE_FACTOR
+                clean = clean * SCALE_FACTOR
 
                 # Accumulate tensors
                 clean_all.append(clean.cpu().numpy().squeeze())
@@ -490,7 +497,8 @@ def predict_denoiser(
     psnr_all_2 = np.concatenate(psnr_all_2)
     sigma_all = np.concatenate(sigma_all)
 
-    # ssim_all = ssim_batch(clean_all, out_all)
+    ssim_all = ssim_batch(clean_all, out_all)
+    ssim_all_2 = ssim_batch(clean_all, out_all_2)
 
     # ---- Print stats ---- #
     if print_stats:
@@ -500,17 +508,23 @@ def predict_denoiser(
             f"Min {psnr_all.min():.03f} | "
             f"Max {psnr_all.max():.03f}"
         )
+        print(
+            f"SSIM  Mean {ssim_all.mean():.03f} | "
+            f"Min {ssim_all.min():.03f} | "
+            f"Max {ssim_all.max():.03f}"
+        )
+        print("-" * 30)
         print("DRUNet:")
         print(
             f"PSNR  Mean {psnr_all_2.mean():.03f} | "
             f"Min {psnr_all_2.min():.03f} | "
             f"Max {psnr_all_2.max():.03f}"
         )
-        # print(
-        #     f"SSIM  Mean {ssim_all.mean():.03f} | "
-        #     f"Min {ssim_all.min():.03f} | "
-        #     f"Max {ssim_all.max():.03f}"
-        # )
+        print(
+            f"SSIM  Mean {ssim_all_2.mean():.03f} | "
+            f"Min {ssim_all_2.min():.03f} | "
+            f"Max {ssim_all_2.max():.03f}"
+        )
 
     # ---- Build metrics dict ---- #
     metrics = {
@@ -548,7 +562,7 @@ def predict_denoiser(
             # same_scale=[0, 1, 2],
             subtitles=[
                 [None] * n,
-                [rf"{s:.02f} $\sigma$" for s in sigma_all[inds]],
+                [f"{s:.02f}" for s in sigma_all[inds]],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_1, psnr_all[inds])],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_2, psnr_all_2[inds])],
             ],

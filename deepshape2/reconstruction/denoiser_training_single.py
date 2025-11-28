@@ -20,6 +20,7 @@ from deepshape2.utils import (
     psnr_torch,
     save_ckp,
     set_seed,
+    ssim_batch,
     time_string,
 )
 from deepshape2.visualization import plot, plot_losses
@@ -42,6 +43,9 @@ NITER = 10
 SIGMA_VALS = np.geomspace(2 * SIGMA, 0.1 * SIGMA, NITER)
 SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 CROP_SIZE = 96
+
+
+MSE_FACTOR = 1
 
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + f"denoiser_isolated_{CROP_SIZE}.pt"
@@ -78,10 +82,12 @@ val_dataset = DenoiseDataset(
 
 # Initialize DataLoaders
 total_size = len(train_dataset)
-subset_size = 10_000
+subset_size = 100_000
 
 indices = np.random.choice(total_size, subset_size, replace=False)
 sampler = SubsetRandomSampler(indices)
+
+indices_val = np.random.choice(len(val_dataset), 10_000, replace=False)
 
 train_loader = DataLoader(
     train_dataset,
@@ -94,7 +100,7 @@ train_loader = DataLoader(
 )
 
 val_loader = DataLoader(
-    val_dataset,
+    val_dataset[indices_val],
     batch_size=BATCH_SIZE,
     shuffle=False,
     num_workers=8,
@@ -217,7 +223,7 @@ def train_denoiser(
                 optimizer.zero_grad(set_to_none=True)
                 noise = model(noisy, sigma_idx)
                 denoise = noisy - noise
-                loss = mse(denoise, clean) * 1e12
+                loss = mse(denoise, clean) * MSE_FACTOR
 
                 loss.backward()
 
@@ -351,8 +357,7 @@ def train_denoiser(
 @torch.no_grad()
 def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
     model.eval()
-    mse = torch.nn.MSELoss()
-    losses = []
+    psnr_all = []
 
     for clean_batch in val_loader:
         # Prepare batch
@@ -361,10 +366,10 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
         noise = model(noisy, sigma_idx)
         denoise = noisy - noise
 
-        loss = mse(denoise, clean) * 1e12
-        losses.append(loss.detach().cpu())
+        psnr_batch = psnr_torch(clean, denoise)
+        psnr_all.append(-psnr_batch)
 
-    return torch.stack(losses).mean().item()
+    return torch.cat(psnr_all).mean().item()
 
 
 def predict_denoiser(
@@ -419,9 +424,8 @@ def predict_denoiser(
                 sigma_all.append(target_psnr.cpu().numpy())
 
                 # Forward pass
-                out = model(noisy, sigma_idx)
-                if isinstance(out, (tuple, list)):
-                    out = out[0]
+                noise = model(noisy, sigma_idx)
+                out = noisy - noise
 
                 out2 = model2(noisy, sigma_vals.squeeze().float())
 
@@ -484,12 +488,20 @@ def predict_denoiser(
     if n > 0:
         np.random.seed(40)
         inds = np.random.choice(range(len(clean_all)), size=n, replace=False)
+        clean_inds = clean_all[inds]
+        noisy_inds = noisy_all[inds]
+        out_inds = out_all[inds]
+        out_inds_2 = out_all_2[inds]
+
+        ssim_1 = ssim_batch(clean_inds, out_inds)
+        ssim_2 = ssim_batch(clean_inds, out_inds_2)
+
         plot(
             images=[
-                clean_all[inds],
-                noisy_all[inds],
-                out_all[inds],
-                out_all_2[inds],
+                clean_inds,
+                noisy_inds,
+                out_inds,
+                out_inds_2,
             ],
             caption=["True", "Noisy", "Refinenet", "DRUNet"],
             cbar=True,
@@ -498,8 +510,8 @@ def predict_denoiser(
             subtitles=[
                 [None] * n,
                 [f"{s:.02f}" for s in sigma_all[inds]],
-                [f"{p:.02f} dB" for p in psnr_all[inds]],
-                [f"{p:.02f} dB" for p in psnr_all_2[inds]],
+                [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_1, psnr_all[inds])],
+                [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_2, psnr_all_2[inds])],
             ],
         )
 

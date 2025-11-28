@@ -36,8 +36,15 @@ if run_env == "genci":
 else:
     BATCH_SIZE = 16
 
+
+SIGMA = 0.71e-06
+NITER = 10
+SIGMA_VALS = np.geomspace(2 * SIGMA, 0.1 * SIGMA, NITER)
+SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
+CROP_SIZE = 96
+
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "denoiser_isolated.pt"
+loc_weights = MODEL_DIR + f"denoiser_isolated_{CROP_SIZE}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -46,12 +53,6 @@ lr_init = 1e-4
 
 tqdm_kwargs = get_tqdm()
 # %% Denoiser Model Setup and data
-SIGMA = 0.71e-06
-NITER = 10
-SIGMA_VALS = np.geomspace(2 * SIGMA, 0.1 * SIGMA, NITER)
-SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
-CROP_SIZE = 96
-
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
 

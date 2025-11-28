@@ -32,24 +32,25 @@ TQDM_FLAG = cfg["TQDM"]
 
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
-    BATCH_SIZE = 16
+    BATCH_SIZE = 24
 else:
-    BATCH_SIZE = 8
+    BATCH_SIZE = 16
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "denoiser_isolated.pt"
+loc_weights = MODEL_DIR + "denoiser_isolated_128.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
-lr_init = 1e-3
+lr_init = 1e-4
 
 tqdm_kwargs = get_tqdm()
 # %% Denoiser Model Setup and data
 SIGMA = 0.71e-06
-NITER = 30
+NITER = 10
 SIGMA_VALS = np.geomspace(2 * SIGMA, 0.1 * SIGMA, NITER)
 SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
+CROP_SIZE = 96
 
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
@@ -62,6 +63,7 @@ train_dataset = DenoiseDataset(
     key="isolated_stamps",
     # key="blended_stamps",
     groups=group_names_train,
+    crop=CROP_SIZE,
 )
 
 
@@ -70,11 +72,12 @@ val_dataset = DenoiseDataset(
     key="isolated_stamps",
     # key="blended_stamps",
     groups=group_names_val,
+    crop=CROP_SIZE,
 )
 
 # Initialize DataLoaders
 total_size = len(train_dataset)
-subset_size = 100_000
+subset_size = 10_000
 
 indices = np.random.choice(total_size, subset_size, replace=False)
 sampler = SubsetRandomSampler(indices)
@@ -211,7 +214,8 @@ def train_denoiser(
                 # Model forward + loss
                 # ---------------------------
                 optimizer.zero_grad(set_to_none=True)
-                denoise = model(noisy, sigma_idx)
+                noise = model(noisy, sigma_idx)
+                denoise = noisy - noise
                 loss = mse(denoise, clean) * 1e12
 
                 loss.backward()
@@ -353,7 +357,8 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
         # Prepare batch
         noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
 
-        denoise = model(noisy, sigma_idx)
+        noise = model(noisy, sigma_idx)
+        denoise = noisy - noise
 
         loss = mse(denoise, clean) * 1e12
         losses.append(loss.detach().cpu())

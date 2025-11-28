@@ -221,6 +221,7 @@ class DenoiseDataset(Dataset):
         groups=None,
         transform=None,
         min_flux: float = None,
+        crop: int = 128,
     ):
         """
         Minimal multi-group HDF5 dataset for clean images.
@@ -238,6 +239,7 @@ class DenoiseDataset(Dataset):
         self.path = path
         self.key = key
         self.min_flux = min_flux
+        self.crop = crop
 
         # Default transforms (same structure as you specified)
         if transform is None:
@@ -338,7 +340,8 @@ class DenoiseDataset(Dataset):
             img = img[np.newaxis, :, :]
 
         img = torch.from_numpy(img.astype(np.float32))
-        img = crop_128(img)
+        crop_fn = CenterCrop(self.crop)
+        img = crop_fn(img)
         if self.transform:
             img = self.transform(img)
 

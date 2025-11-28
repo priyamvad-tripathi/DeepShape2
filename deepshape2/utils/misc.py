@@ -1,7 +1,6 @@
 import ctypes
 import gc
 import time
-from functools import reduce
 
 from colorist import Color
 from tqdm import tqdm
@@ -15,9 +14,10 @@ __all__ = [
 
 
 def time_string(t):
-    return "%02d:%02d:%02d.%03d" % reduce(
-        lambda ll, b: divmod(ll[0], b) + ll[1:], [(round(t * 1000),), 1000, 60, 60]
-    )
+    total_seconds = int(t)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 def trim_memory() -> int:

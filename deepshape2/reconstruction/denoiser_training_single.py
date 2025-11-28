@@ -37,7 +37,7 @@ else:
     BATCH_SIZE = 16
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "denoiser_isolated_128.pt"
+loc_weights = MODEL_DIR + "denoiser_isolated.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()

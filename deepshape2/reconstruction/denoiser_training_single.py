@@ -7,7 +7,7 @@ import numpy as np
 import torch
 from colorist import Color
 from deepinv.models import DRUNet
-from torch.utils.data import DataLoader, SubsetRandomSampler
+from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import DenoiseDataset
 from deepshape2.models import RefineNet
@@ -84,15 +84,16 @@ val_dataset = DenoiseDataset(
 total_size = len(train_dataset)
 subset_size = 10_000
 
-indices = np.random.choice(total_size, subset_size, replace=False)
-sampler = SubsetRandomSampler(indices)
+# indices = np.random.choice(total_size, subset_size, replace=False)
+# sampler = SubsetRandomSampler(indices)
 
+indices_train = np.random.choice(len(train_dataset), subset_size, replace=False)
 indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)
 
 train_loader = DataLoader(
-    train_dataset,
+    train_dataset[indices_train],
     batch_size=BATCH_SIZE,
-    sampler=sampler,
+    # sampler=sampler,
     shuffle=False,
     num_workers=8,
     pin_memory=True,
@@ -113,6 +114,14 @@ model = RefineNet(n_noise_scale=len(SIGMA_DICT))
 model = model.to(device)
 # model = torch.compile(model)
 # %% Define Training and Testing Function
+
+
+def grad_norm(model):
+    tot = 0.0
+    for p in model.parameters():
+        if p.grad is not None:
+            tot += float(p.grad.detach().norm(2).item() ** 2)
+    return tot**0.5
 
 
 def process_batch(clean_batch, device):
@@ -212,6 +221,8 @@ def train_denoiser(
         pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
+        # params_before = [p.detach().clone() for p in model.parameters() if p.requires_grad]
+
         with pbar:
             for clean_batch in train_loader:
                 # Prepare batch
@@ -228,12 +239,7 @@ def train_denoiser(
                 loss.backward()
 
                 # Compute gradient norm
-                total_norm = 0.0
-                for p in model.parameters():
-                    if p.grad is not None:
-                        param_norm = p.grad.data.norm(2)
-                        total_norm += param_norm.item() ** 2
-                total_norm = total_norm**0.5
+                total_norm = grad_norm(model)
 
                 optimizer.step()
                 if scheduler:
@@ -267,6 +273,27 @@ def train_denoiser(
                 print(line0)
                 line = f"Train Loss: {epoch_loss:.{precision}e} | Grad Norm: {total_norm:.2e} | "
 
+            print("loss:", float(loss.detach().cpu()))
+            print("pred min/max:", denoise.min().item(), denoise.max().item())
+            print("target min/max:", clean.min().item(), clean.max().item())
+            print(
+                "any nan pred/target/loss:",
+                torch.isnan(denoise).any(),
+                torch.isnan(clean).any(),
+                torch.isnan(loss).any(),
+            )
+
+            with torch.no_grad():
+                rms = torch.sqrt(sum((p.data**2).mean() for p in model.parameters()))
+            print("param_rms:", float(rms))
+
+            # updates = [
+            #     ((p.detach() - pb).norm().item())
+            #     for p, pb in zip(model.parameters(), params_before)
+            #     if p.requires_grad
+            # ]
+            # print("mean update norm:", np.mean(updates), "max:", np.max(updates))
+
             # --- Validation ---
             if val_loader:
                 val_loss = validation_loss_denoiser(
@@ -286,16 +313,16 @@ def train_denoiser(
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Grad Norm": f"{total_norm:.2e}",
                     "Val Loss": (
-                        f"{Color.RED}{val_loss:.{precision}e}{Color.OFF}"
+                        f"{Color.RED}{-val_loss:.{precision}e} dB{Color.OFF}"
                         if is_best
-                        else f"{val_loss:.{precision}e}"
+                        else f"{-val_loss:.{precision}e} dB"
                     ),
                 }
                 pbar.set_postfix(pfix)
 
                 if not TQDM_FLAG:
                     marker = "BEST" if is_best else ""
-                    line += f" | Val Loss: {val_loss:.{precision}e} {marker}"
+                    line += f" | Val Loss: {-val_loss:.{precision}e} dB {marker}"
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}

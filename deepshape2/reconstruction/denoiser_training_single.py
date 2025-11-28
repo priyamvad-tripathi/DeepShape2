@@ -35,7 +35,7 @@ run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
     BATCH_SIZE = 24
 else:
-    BATCH_SIZE = 16
+    BATCH_SIZE = 12
 
 
 SIGMA = 0.71e-06
@@ -45,7 +45,8 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 CROP_SIZE = 96
 
 
-MSE_FACTOR = 1
+SCALE_FACTOR = 1e4  # To bring pixel values to order ~1
+
 
 loc_data = DATA_DIR + "wide_set.h5"
 loc_weights = MODEL_DIR + f"denoiser_isolated_{CROP_SIZE}.pt"
@@ -136,8 +137,8 @@ def process_batch(clean_batch, device):
         clean = clean.flip(-2)
 
     # Random PSNR target per sample
-    target_psnr = torch.rand(N, device=device) * 49.5 + 0.5  # range [0.5, 50]
-    peak = clean.abs().amax(dim=(1, 2, 3))  # shape (N,)
+    # target_psnr = torch.rand(N, device=device) * 49.5 + 0.5  # range [0.5, 50]
+    # peak = clean.abs().amax(dim=(1, 2, 3))  # shape (N,)
 
     # Choose sigma values from dictionary (indices sampled uniformly)
     sigma_idx = torch.randint(
@@ -150,13 +151,19 @@ def process_batch(clean_batch, device):
     ).view(N, 1, 1, 1)
 
     # Correct scaling factor
-    scale = (target_psnr / peak).view(N, 1, 1, 1) * sigma_vals
-    clean_scaled = clean * scale
+    # scale = (target_psnr / peak).view(N, 1, 1, 1) * sigma_vals
+    # clean_scaled = clean * scale
+    clean_scaled = clean * 10  # To account for PSF scaling
 
     # Add noise
     noisy = clean_scaled + torch.randn_like(clean_scaled) * sigma_vals
 
-    return noisy.float(), clean_scaled.float(), sigma_idx, target_psnr, sigma_vals
+    return (
+        noisy.float() * SCALE_FACTOR,
+        clean_scaled.float() * SCALE_FACTOR,
+        sigma_idx,
+        sigma_vals,
+    )
 
 
 def train_denoiser(
@@ -226,7 +233,7 @@ def train_denoiser(
         with pbar:
             for clean_batch in train_loader:
                 # Prepare batch
-                noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
+                noisy, clean, sigma_idx, _ = process_batch(clean_batch, device)
 
                 # ---------------------------
                 # Model forward + loss
@@ -234,7 +241,7 @@ def train_denoiser(
                 optimizer.zero_grad(set_to_none=True)
                 noise = model(noisy, sigma_idx)
                 denoise = noisy - noise
-                loss = mse(denoise, clean) * MSE_FACTOR
+                loss = mse(denoise, clean)
 
                 loss.backward()
 
@@ -250,7 +257,7 @@ def train_denoiser(
 
                 postfix = {
                     "Train Loss": f"{torch.stack(batch_losses).mean():.{precision}e}",
-                    "Grad Norm": f"{total_norm:.2e}",
+                    # "Grad Norm": f"{total_norm:.2e}",
                 }
                 if current_lr is not None:
                     postfix["LR"] = (
@@ -272,20 +279,6 @@ def train_denoiser(
                     line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
                 print(line0)
                 line = f"Train Loss: {epoch_loss:.{precision}e} | Grad Norm: {total_norm:.2e} | "
-
-            print("loss:", float(loss.detach().cpu()))
-            print("pred min/max:", denoise.min().item(), denoise.max().item())
-            print("target min/max:", clean.min().item(), clean.max().item())
-            print(
-                "any nan pred/target/loss:",
-                torch.isnan(denoise).any(),
-                torch.isnan(clean).any(),
-                torch.isnan(loss).any(),
-            )
-
-            with torch.no_grad():
-                rms = torch.sqrt(sum((p.data**2).mean() for p in model.parameters()))
-            print("param_rms:", float(rms))
 
             # updates = [
             #     ((p.detach() - pb).norm().item())
@@ -313,16 +306,16 @@ def train_denoiser(
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Grad Norm": f"{total_norm:.2e}",
                     "Val Loss": (
-                        f"{Color.RED}{-val_loss:.{precision}e} dB{Color.OFF}"
+                        f"{Color.RED}{-val_loss:.2f} dB{Color.OFF}"
                         if is_best
-                        else f"{-val_loss:.{precision}e} dB"
+                        else f"{-val_loss:.2f} dB"
                     ),
                 }
                 pbar.set_postfix(pfix)
 
                 if not TQDM_FLAG:
                     marker = "BEST" if is_best else ""
-                    line += f" | Val Loss: {-val_loss:.{precision}e} dB {marker}"
+                    line += f" | Val Loss: {-val_loss:.2f} dB {marker}"
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -330,6 +323,20 @@ def train_denoiser(
             if not TQDM_FLAG:
                 print(line)
                 print("-" * 50)
+
+            # print("\n")
+            # print("pred min/max:", denoise.min().item(), denoise.max().item())
+            # print("target min/max:", clean.min().item(), clean.max().item())
+            # print(
+            #     "any nan pred/target/loss:",
+            #     torch.isnan(denoise).any(),
+            #     torch.isnan(clean).any(),
+            #     torch.isnan(loss).any(),
+            # )
+
+            # with torch.no_grad():
+            #     rms = torch.sqrt(sum((p.data**2).mean() for p in model.parameters()))
+            # print("param_rms:", float(rms))
 
         # --- Save checkpoint ---
         if filename:
@@ -388,7 +395,7 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
 
     for clean_batch in val_loader:
         # Prepare batch
-        noisy, clean, sigma_idx, _, _ = process_batch(clean_batch, device)
+        noisy, clean, sigma_idx, _ = process_batch(clean_batch, device)
 
         noise = model(noisy, sigma_idx)
         denoise = noisy - noise
@@ -445,16 +452,21 @@ def predict_denoiser(
                     continue
                 pbar.update(1)
 
-                noisy, clean, sigma_idx, target_psnr, sigma_vals = process_batch(
-                    clean_batch, device
-                )
-                sigma_all.append(target_psnr.cpu().numpy())
+                noisy, clean, sigma_idx, sigma_vals = process_batch(clean_batch, device)
+                target_psnr = sigma_vals.view(-1).cpu().numpy() / SIGMA
+                sigma_all.append(target_psnr)
 
                 # Forward pass
                 noise = model(noisy, sigma_idx)
                 out = noisy - noise
 
                 out2 = model2(noisy, sigma_vals.squeeze().float())
+
+                # Inverse scaling
+                out = out / SCALE_FACTOR
+                out2 = out2 / SCALE_FACTOR
+                noisy = noisy / SCALE_FACTOR
+                clean = clean / SCALE_FACTOR
 
                 # Accumulate tensors
                 clean_all.append(clean.cpu().numpy().squeeze())
@@ -536,7 +548,7 @@ def predict_denoiser(
             # same_scale=[0, 1, 2],
             subtitles=[
                 [None] * n,
-                [f"{s:.02f}" for s in sigma_all[inds]],
+                [rf"{s:.02f} $\sigma$" for s in sigma_all[inds]],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_1, psnr_all[inds])],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_2, psnr_all_2[inds])],
             ],

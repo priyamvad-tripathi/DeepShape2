@@ -82,12 +82,12 @@ val_dataset = DenoiseDataset(
 
 # Initialize DataLoaders
 total_size = len(train_dataset)
-subset_size = 100_000
+subset_size = 10_000
 
 indices = np.random.choice(total_size, subset_size, replace=False)
 sampler = SubsetRandomSampler(indices)
 
-indices_val = np.random.choice(len(val_dataset), 10_000, replace=False)
+indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)
 
 train_loader = DataLoader(
     train_dataset,

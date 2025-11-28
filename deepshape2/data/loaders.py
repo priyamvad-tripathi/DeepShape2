@@ -327,10 +327,35 @@ class DenoiseDataset(Dataset):
 
     # ---------------- Retrieve item ---------------- #
     def __getitem__(self, idx):
-        if torch.is_tensor(idx):
-            idx = idx.item()
-
         hf = self._get_h5()
+
+        # -----------------------
+        # 1. Handle slice objects
+        # -----------------------
+        if isinstance(idx, slice):
+            # Convert slice → list of indices
+            start, stop, step = idx.indices(len(self))
+            return [self[i] for i in range(start, stop, step)]
+
+        # -----------------------
+        # 2. Handle list or array
+        # -----------------------
+        if isinstance(idx, (list, tuple, np.ndarray)):
+            return [self[int(i)] for i in idx]
+
+        # -----------------------
+        # 3. Handle tensor index
+        # -----------------------
+        if torch.is_tensor(idx):
+            if idx.dim() == 0:
+                idx = idx.item()
+            else:
+                # Tensor of indices → list
+                return [self[int(i)] for i in idx.tolist()]
+
+        # -----------------------
+        # 4. Standard single index
+        # -----------------------
         group_name, local_idx = self._locate(idx)
         group = hf[group_name]
 
@@ -342,6 +367,7 @@ class DenoiseDataset(Dataset):
         img = torch.from_numpy(img.astype(np.float32))
         crop_fn = CenterCrop(self.crop)
         img = crop_fn(img)
+
         if self.transform:
             img = self.transform(img)
 

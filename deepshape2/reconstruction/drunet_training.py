@@ -37,8 +37,10 @@ TQDM_FLAG = cfg["TQDM"]
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
     BATCH_SIZE = 32
+    subset_size = 100_000
 else:
     BATCH_SIZE = 16
+    subset_size = 10_000
 
 
 NITER = 10
@@ -81,7 +83,6 @@ val_dataset = DenoiseDataset(
 )
 
 # Initialize DataLoaders
-subset_size = 10_000
 sampler = RandomSubsetSampler(len(train_dataset), subset_size)
 
 indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)

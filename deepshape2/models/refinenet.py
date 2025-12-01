@@ -53,9 +53,9 @@ class CondMLP(nn.Module):
 class CondInstanceNorm(nn.Module):
     def __init__(self, in_channels, n_noise_scale=10, eps=0):
         super().__init__()
-        # self.gamma = nn.Parameter(torch.ones(n_noise_scale, in_channels))
-        # self.beta = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
-        # self.alpha = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
+        self.gamma = nn.Parameter(torch.ones(n_noise_scale, in_channels))
+        self.beta = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
+        self.alpha = nn.Parameter(torch.zeros(n_noise_scale, in_channels))
         self.eps = eps
         self.cond_mlp = CondMLP(in_channels, n_noise_scale=n_noise_scale)
 
@@ -64,13 +64,13 @@ class CondInstanceNorm(nn.Module):
         # noise_scale_idx: (batch_size)
         # gamma: (n_noise_scale, in_channels)
 
-        # bsz = x.shape[0]
-        # gamma = self.gamma[noise_scale_idx].view(
-        #     bsz, -1, 1, 1
-        # )  # (bsz, in_channels, 1, 1)
-        # beta = self.beta[noise_scale_idx].view(bsz, -1, 1, 1)
-        # alpha = self.alpha[noise_scale_idx].view(bsz, -1, 1, 1)
-        gamma, beta, alpha = self.cond_mlp(x, noise_scale_idx)
+        bsz = x.shape[0]
+        gamma = self.gamma[noise_scale_idx].view(
+            bsz, -1, 1, 1
+        )  # (bsz, in_channels, 1, 1)
+        beta = self.beta[noise_scale_idx].view(bsz, -1, 1, 1)
+        alpha = self.alpha[noise_scale_idx].view(bsz, -1, 1, 1)
+        # gamma, beta, alpha = self.cond_mlp(x, noise_scale_idx)
 
         mu = x.mean(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)
         var = x.var(dim=(2, 3), keepdim=True)  # (batch_size, in_channels, 1, 1)

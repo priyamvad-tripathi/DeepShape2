@@ -10,7 +10,8 @@ from deepinv.models import DRUNet as DinvDRUNet
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import DenoiseDataset, RandomSubsetSampler
-from deepshape2.models.drunet import DRUNet
+
+# from deepshape2.models.drunet import DRUNet
 from deepshape2.utils import (
     get_freest_gpu,
     get_progress_bar,
@@ -35,9 +36,9 @@ TQDM_FLAG = cfg["TQDM"]
 
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
-    BATCH_SIZE = 24
+    BATCH_SIZE = 32
 else:
-    BATCH_SIZE = 12
+    BATCH_SIZE = 16
 
 
 NITER = 10
@@ -45,7 +46,7 @@ CROP_SIZE = 96
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}.pt"
+loc_weights = MODEL_DIR + f"drunet_dinv_{CROP_SIZE}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -80,7 +81,7 @@ val_dataset = DenoiseDataset(
 )
 
 # Initialize DataLoaders
-subset_size = 100_000
+subset_size = 10_000
 sampler = RandomSubsetSampler(len(train_dataset), subset_size)
 
 indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)
@@ -105,7 +106,13 @@ val_loader = DataLoader(
 )
 
 
-model = DRUNet()
+# model = DRUNet()
+model = DinvDRUNet(
+    in_channels=1,
+    out_channels=1,
+    pretrained=MODEL_DIR + "drunet_deepinv_gray_finetune_26k.pth",
+    device=device,
+)
 model = model.to(device)
 # model = torch.compile(model)
 # %% Define Training and Testing Function
@@ -187,7 +194,8 @@ def train_denoiser(
         print("No saved checkpoints found. Starting from scratch.")
 
     # --- Training loop ---
-    mse = torch.nn.MSELoss()
+    # mse = torch.nn.MSELoss()
+    mse = torch.nn.L1Loss(reduction="sum")
 
     for epoch in range(epochs):
         if epoch < current_epoch:

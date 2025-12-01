@@ -47,11 +47,10 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 CROP_SIZE = 96
 
 
-SCALE_FACTOR = 1e-4  # To bring pixel values to order ~1
 PSF_FACTOR = 10.0  # To account for PSF scaling
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"denoiser_new_{CROP_SIZE}.pt"
+loc_weights = MODEL_DIR + f"denoiser_scaled_{CROP_SIZE}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -99,7 +98,7 @@ train_loader = DataLoader(
     train_dataset[indices_train],
     batch_size=BATCH_SIZE,
     # sampler=sampler,
-    shuffle=False,
+    shuffle=True,
     num_workers=8,
     pin_memory=True,
     drop_last=True,
@@ -140,10 +139,6 @@ def process_batch(clean_batch, device):
     if torch.rand(1) < 0.5:
         clean = clean.flip(-2)
 
-    # Random PSNR target per sample
-    # target_psnr = torch.rand(N, device=device) * 49.5 + 0.5  # range [0.5, 50]
-    # peak = clean.abs().amax(dim=(1, 2, 3))  # shape (N,)
-
     # Choose sigma values from dictionary (indices sampled uniformly)
     sigma_idx = torch.randint(
         0, len(SIGMA_DICT), size=(N,), device=device, dtype=torch.long
@@ -156,22 +151,30 @@ def process_batch(clean_batch, device):
 
     # Correct scaling factor
     clean_scaled = clean * PSF_FACTOR  # To account for PSF scaling
+
     # Boost images to ensure minimum PSNR
     peak = clean_scaled.abs().amax(dim=(1, 2, 3))
-    boost = torch.clamp(
-        (5 * sigma_vals.flatten()) / peak, min=1.0
-    )  # PSNR of at least 5
+    boost = torch.clamp((5 * sigma_vals.flatten()) / peak, min=1.0)  # Ensure PSNR >= 5
     boost = boost.view(N, 1, 1, 1)
     clean_scaled = clean_scaled * boost
 
     # Add noise
     noisy = clean_scaled + torch.randn_like(clean_scaled) * sigma_vals
 
+    # Normalise by image peak
+    norm_factor = noisy.amax(dim=(1, 2, 3))
+    noisy_norm = noisy / norm_factor.view(-1, 1, 1, 1)
+    clean_norm = clean_scaled / norm_factor.view(-1, 1, 1, 1)
+
+    # Peak/noise as 1D tensor
+    peak_to_noise = clean_scaled.abs().amax(dim=(1, 2, 3)) / sigma_vals.flatten()
+
     return (
-        (noisy / SCALE_FACTOR).float(),
-        (clean_scaled / SCALE_FACTOR).float(),
+        noisy_norm.float(),
+        clean_norm.float(),
         sigma_idx,
-        sigma_vals,
+        peak_to_noise.float(),
+        norm_factor.view(-1, 1, 1, 1).float(),
     )
 
 
@@ -242,7 +245,7 @@ def train_denoiser(
         with pbar:
             for clean_batch in train_loader:
                 # Prepare batch
-                noisy, clean, sigma_idx, _ = process_batch(clean_batch, device)
+                noisy, clean, sigma_idx, *_ = process_batch(clean_batch, device)
 
                 # ---------------------------
                 # Model forward + loss
@@ -406,7 +409,7 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
 
     for clean_batch in val_loader:
         # Prepare batch
-        noisy, clean, sigma_idx, _ = process_batch(clean_batch, device)
+        noisy, clean, sigma_idx, *_ = process_batch(clean_batch, device)
 
         noise = model(noisy, sigma_idx)
         denoise = noisy - noise
@@ -443,7 +446,7 @@ def predict_denoiser(
     noisy_all = []
     out_all = []
     psnr_all = []
-    sigma_all = []
+    input_psnr = []
     out_all_2 = []
     psnr_all_2 = []
 
@@ -464,21 +467,24 @@ def predict_denoiser(
                     continue
                 pbar.update(1)
 
-                noisy, clean, sigma_idx, sigma_vals = process_batch(clean_batch, device)
-                peaks = clean.amax(dim=(1, 2, 3)).cpu().numpy() * SCALE_FACTOR
-                sigma_all.append(peaks / (sigma_vals.squeeze().cpu().numpy()))
+                noisy, clean, sigma_idx, peak_to_noise, norm_factor = process_batch(
+                    clean_batch, device
+                )
+                peaks = clean.amax(dim=(1, 2, 3))
+                input_psnr.append(peak_to_noise.squeeze().cpu().numpy())
 
                 # Forward pass
                 noise = model(noisy, sigma_idx)
                 out = noisy - noise
 
-                out2 = model2(noisy, sigma_vals.squeeze().float() / SCALE_FACTOR)
+                sigma_vals = peaks / peak_to_noise
+                out2 = model2(noisy, sigma_vals.float())
 
                 # Inverse scaling
-                out = out * SCALE_FACTOR
-                out2 = out2 * SCALE_FACTOR
-                noisy = noisy * SCALE_FACTOR
-                clean = clean * SCALE_FACTOR
+                out = out * norm_factor
+                out2 = out2 * norm_factor
+                noisy = noisy * norm_factor
+                clean = clean * norm_factor
 
                 # Accumulate tensors
                 clean_all.append(clean.cpu().numpy().squeeze())
@@ -500,7 +506,7 @@ def predict_denoiser(
     out_all_2 = np.concatenate(out_all_2)
     psnr_all = np.concatenate(psnr_all)
     psnr_all_2 = np.concatenate(psnr_all_2)
-    sigma_all = np.concatenate(sigma_all)
+    input_psnr = np.concatenate(input_psnr)
 
     ssim_all = ssim_batch(clean_all, out_all)
     ssim_all_2 = ssim_batch(clean_all, out_all_2)
@@ -567,7 +573,7 @@ def predict_denoiser(
             # same_scale=[0, 1, 2],
             subtitles=[
                 [None] * n,
-                [f"{s:.02f}" for s in sigma_all[inds]],
+                [f"{psn:.02f}" for psn in input_psnr[inds]],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_1, psnr_all[inds])],
                 [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_2, psnr_all_2[inds])],
             ],

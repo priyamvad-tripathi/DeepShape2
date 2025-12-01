@@ -24,6 +24,7 @@ from deepshape2.utils import (
     time_string,
 )
 from deepshape2.visualization import plot, plot_losses
+from torch.utils.data.sampler import SubsetRandomSampler
 
 # %% Defaults and Configurations
 cfg = load_config()
@@ -45,11 +46,11 @@ SIGMA_DICT = {idx: sig for idx, sig in enumerate(SIGMA_VALS)}
 CROP_SIZE = 96
 
 
-SCALE_FACTOR = 1.25e-5  # To bring pixel values to order ~1
+SCALE_FACTOR = 1e-4  # To bring pixel values to order ~1
 PSF_FACTOR = 10.0  # To account for PSF scaling
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"denoiser_isolated_{CROP_SIZE}.pt"
+loc_weights = MODEL_DIR + f"denoiser_full_{CROP_SIZE}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -85,18 +86,18 @@ val_dataset = DenoiseDataset(
 
 # Initialize DataLoaders
 total_size = len(train_dataset)
-subset_size = 10_000
+subset_size = 100_000
 
-# indices = np.random.choice(total_size, subset_size, replace=False)
-# sampler = SubsetRandomSampler(indices)
+indices = np.random.choice(total_size, subset_size, replace=False)
+sampler = SubsetRandomSampler(indices)
 
-indices_train = np.random.choice(len(train_dataset), subset_size, replace=False)
+#indices_train = np.random.choice(len(train_dataset), subset_size, replace=False)
 indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)
 
 train_loader = DataLoader(
-    train_dataset[indices_train],
+    train_dataset,
     batch_size=BATCH_SIZE,
-    # sampler=sampler,
+    sampler=sampler,
     shuffle=False,
     num_workers=8,
     pin_memory=True,

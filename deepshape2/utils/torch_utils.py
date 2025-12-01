@@ -70,10 +70,11 @@ def load_ckp(filename, model, optimizer, device):
     return model, optimizer, checkpoint
 
 
-def set_seed(seed=2024):
+def set_seed(seed=2024, deterministic=True):
     """Function to set the random seed for reproducibility."""
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
+    if deterministic:
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False

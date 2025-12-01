@@ -402,6 +402,8 @@ def validation_loss_denoiser(model, val_loader, device, sigma_dict=SIGMA_DICT):
     model.eval()
     psnr_all = []
 
+    set_seed(1, deterministic=False)
+
     for clean_batch in val_loader:
         # Prepare batch
         noisy, clean, sigma_idx, _ = process_batch(clean_batch, device)
@@ -435,6 +437,7 @@ def predict_denoiser(
         model.load_state_dict(weights)
 
     model.eval()
+    set_seed(1, deterministic=False)
 
     clean_all = []
     noisy_all = []
@@ -619,10 +622,16 @@ val_loss = checkpoint["val_loss_list"]
 train_loss = checkpoint["train_loss_list"]
 
 plot_losses(
-    [train_loss, val_loss],
-    labels=["Train", "Validation"],
+    [train_loss],
+    labels=["Train"],
     skip=0,
     logscale=True,
+)
+plot_losses(
+    [val_loss],
+    labels=["Validation"],
+    skip=0,
+    # logscale=True,
 )
 
 plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=True)

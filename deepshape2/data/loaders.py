@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.v2 as v2
-from torch.utils.data import DataLoader, Dataset, get_worker_info
+from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
 
 from deepshape2.utils import load_config, set_seed
 
@@ -537,3 +537,18 @@ def dataloader(
             drop_last=True,
         )
         return loader
+
+
+# %%
+class RandomSubsetSampler(Sampler):
+    def __init__(self, dataset_size, subset_size):
+        self.dataset_size = dataset_size
+        self.subset_size = subset_size
+
+    def __iter__(self):
+        # generate new random subset each epoch
+        idx = np.random.choice(self.dataset_size, self.subset_size, replace=False)
+        return iter(idx.tolist())
+
+    def __len__(self):
+        return self.subset_size

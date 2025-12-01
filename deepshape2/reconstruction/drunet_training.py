@@ -9,7 +9,7 @@ from colorist import Color
 from deepinv.models import DRUNet as DinvDRUNet
 from torch.utils.data import DataLoader
 
-from deepshape2.data.loaders import DenoiseDataset
+from deepshape2.data.loaders import DenoiseDataset, RandomSubsetSampler
 from deepshape2.models.drunet import DRUNet
 from deepshape2.utils import (
     get_freest_gpu,
@@ -80,19 +80,16 @@ val_dataset = DenoiseDataset(
 )
 
 # Initialize DataLoaders
-subset_size = 10_000
+subset_size = 100_000
+sampler = RandomSubsetSampler(len(train_dataset), subset_size)
 
-# indices = np.random.choice(total_size, subset_size, replace=False)
-# sampler = SubsetRandomSampler(indices)
-
-indices_train = np.random.choice(len(train_dataset), subset_size, replace=False)
 indices_val = np.random.choice(len(val_dataset), 2_000, replace=False)
 
 train_loader = DataLoader(
-    train_dataset[indices_train],
+    train_dataset,
     batch_size=BATCH_SIZE,
-    # sampler=sampler,
-    shuffle=True,
+    sampler=sampler,
+    shuffle=False,
     num_workers=8,
     pin_memory=True,
     drop_last=True,
@@ -130,7 +127,7 @@ def process_batch(clean_batch, device):
     clean_scaled = clean / peak_vals
 
     # Add noise
-    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.3
+    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.5
     noisy = clean_scaled + torch.randn_like(clean_scaled) * noise_fac
 
     # Normalise by image peak
@@ -589,8 +586,7 @@ plot_losses([checkpoint["lr_list"]], labels=["Learning Rate"], skip=0, logscale=
 
 metrics = predict_denoiser(
     model,
-    # best_weights,
-    None,
+    best_weights,
     val_loader,
     device=device,
 )

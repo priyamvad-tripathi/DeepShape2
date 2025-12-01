@@ -134,7 +134,7 @@ def process_batch(clean_batch, device):
     clean_scaled = clean / peak_vals
 
     # Add noise
-    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.5
+    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.3
     noisy = clean_scaled + torch.randn_like(clean_scaled) * noise_fac
 
     # Normalise by image peak
@@ -463,7 +463,7 @@ def predict_denoiser(
 
     # ---- Print stats ---- #
     if print_stats:
-        print("Refinenet:")
+        print("Self-trained:")
         print(
             f"PSNR  Mean {psnr_all.mean():.03f} | "
             f"Min {psnr_all.min():.03f} | "
@@ -475,7 +475,7 @@ def predict_denoiser(
             f"Max {ssim_all.max():.03f}"
         )
         print("-" * 30)
-        print("DRUNet:")
+        print("Dinv:")
         print(
             f"PSNR  Mean {psnr_all_2.mean():.03f} | "
             f"Min {psnr_all_2.min():.03f} | "

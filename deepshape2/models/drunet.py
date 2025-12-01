@@ -1,6 +1,10 @@
+import numpy as np
+import torch
 import torch.nn as nn
 
 import deepshape2.models.drunet_blocks as B
+
+__all__ = ["DRUNet", "DRUNet2"]
 
 
 class DRUNet(nn.Module):
@@ -95,8 +99,37 @@ class DRUNet(nn.Module):
 
         self.m_tail = B.conv(nc[0], out_nc, bias=False, mode="C")
 
-    def forward(self, x0):
-        x1 = self.m_head(x0)
+    def prepare_input(self, x, sigma):
+        """
+        x: tensor (N,1,H,W)
+        sigma: float, numpy array, or tensor
+        returns concatenated tensor (N,2,H,W)
+        """
+        N, _, H, W = x.shape
+
+        # convert sigma to tensor
+        if isinstance(sigma, np.ndarray):
+            sigma = torch.from_numpy(sigma)
+        elif isinstance(sigma, float):
+            sigma = torch.tensor([sigma])
+
+        # broadcast scalar sigma
+        if sigma.ndim == 0 or (sigma.ndim == 1 and sigma.numel() == 1):
+            sigma = sigma.expand(N)
+
+        # validate
+        if sigma.ndim != 1 or sigma.numel() != N:
+            raise ValueError("sigma must be scalar or length N")
+
+        # reshape to (N,1,H,W)
+        sigma_map = sigma.view(N, 1, 1, 1).expand(N, 1, H, W)
+
+        # concatenate along channel dimension
+        return torch.cat([x, sigma_map], dim=1).float()
+
+    def forward(self, x0, sigma):
+        x0_n = self.prepare_input(x0, sigma)
+        x1 = self.m_head(x0_n)
         x2 = self.m_down1(x1)
         x3 = self.m_down2(x2)
         x4 = self.m_down3(x3)
@@ -203,8 +236,38 @@ class DRUNet2(nn.Module):
 
         self.m_tail = B.conv(nc[0], out_nc, mode="C")
 
-    def forward(self, x0):
-        x1 = self.m_head(x0)
+    def prepare_input(self, x, sigma):
+        """
+        x: tensor (N,1,H,W)
+        sigma: float, numpy array, or tensor
+        returns concatenated tensor (N,2,H,W)
+        """
+        N, _, H, W = x.shape
+
+        # convert sigma to tensor
+        if isinstance(sigma, np.ndarray):
+            sigma = torch.from_numpy(sigma)
+        elif isinstance(sigma, float):
+            sigma = torch.tensor([sigma])
+
+        # broadcast scalar sigma
+        if sigma.ndim == 0 or (sigma.ndim == 1 and sigma.numel() == 1):
+            sigma = sigma.expand(N)
+
+        # validate
+        if sigma.ndim != 1 or sigma.numel() != N:
+            raise ValueError("sigma must be scalar or length N")
+
+        # reshape to (N,1,H,W)
+        sigma_map = sigma.view(N, 1, 1, 1).expand(N, 1, H, W)
+
+        # concatenate along channel dimension
+        return torch.cat([x, sigma_map], dim=1).float()
+
+    def forward(self, x0, sigma):
+        x0_n = self.prepare_input(x0, sigma)
+
+        x1 = self.m_head(x0_n)
         x2 = self.m_down1(x1)
         x3 = self.m_down2(x2)
         x4 = self.m_down3(x3)
@@ -213,4 +276,5 @@ class DRUNet2(nn.Module):
         x = self.m_up2(x + x3)
         x = self.m_up1(x + x2)
         x = self.m_tail(x + x1) + x0
+        return x
         return x

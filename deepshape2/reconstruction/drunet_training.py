@@ -43,7 +43,7 @@ else:
     subset_size = 10_000
 
 
-CROP_SIZE = 96
+CROP_SIZE = 128
 
 
 loc_data = DATA_DIR + "wide_set.h5"

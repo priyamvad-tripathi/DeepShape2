@@ -532,25 +532,35 @@ def predict_denoiser(
 # %% Train the model and plot results
 
 
-head_params = list(model.m_head.parameters()) + list(model.m_tail.parameters())
+head_modules = [
+    model.m_head,
+    model.m_tail,
+]
 
-transition_params = []
-transition_params += list(model.m_down1[4].parameters())  # 64→128
-transition_params += list(model.m_down2[4].parameters())  # 128→256
-transition_params += list(model.m_down3[4].parameters())  # 256→512
-transition_params += list(model.m_up1[0].parameters())  # up 128→64
-transition_params += list(model.m_up2[0].parameters())  # up 256→128
-transition_params += list(model.m_up3[0].parameters())  # up 512→256
+transition_modules = [
+    model.m_down1[4],  # 64 → 128
+    model.m_down2[4],  # 128 → 256
+    model.m_down3[4],  # 256 → 512
+    model.m_up1[0],  # 128 → 64 (ConvTranspose2d)
+    model.m_up2[0],  # 256 → 128
+    model.m_up3[0],  # 512 → 256
+]
 
-# everything else = backbone blocks
-backbone_params = []
-for nm, module in model.named_modules():
-    if not nm.startswith("m_head") and not nm.startswith("m_tail"):
-        if not ("4)" in nm and ("down" in nm or "up" in nm)):  # filter out transitions
-            for p in module.parameters(recurse=False):
-                if p.requires_grad:
-                    backbone_params.append(p)
+head_params = list(p for m in head_modules for p in m.parameters())
+transition_params = list(p for m in transition_modules for p in m.parameters())
 
+all_params = set(model.parameters())
+used_params = set(head_params) | set(transition_params)
+backbone_params = list(all_params - used_params)
+
+optimizer = torch.optim.AdamW(
+    [
+        {"params": head_params, "lr": lr_init * 0.1},
+        {"params": transition_params, "lr": lr_init},
+        {"params": backbone_params, "lr": lr_init * 0.3},
+    ],
+    weight_decay=1e-6,
+)
 
 optim = torch.optim.AdamW(
     [

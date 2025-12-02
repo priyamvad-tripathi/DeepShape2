@@ -47,12 +47,12 @@ CROP_SIZE = 128
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e6.pt"
+loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e4.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
-lr_init = 1e-6
+lr_init = 1e-4
 
 tqdm_kwargs = get_tqdm()
 # %% Denoiser Model Setup and data

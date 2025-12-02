@@ -46,13 +46,13 @@ else:
 CROP_SIZE = 128
 
 
-fac = 5
+fac = 3
 
 lr_init = 10**-fac
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e{fac}_simple.pt"
+loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e{fac}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -536,60 +536,60 @@ def predict_denoiser(
 # %% Train the model and plot results
 
 
-# head_modules = [
-#     model.m_head,
-#     model.m_tail,
-# ]
+head_modules = [
+    model.m_head,
+    model.m_tail,
+]
 
-# transition_modules = [
-#     model.m_down1[4],  # 64 → 128
-#     model.m_down2[4],  # 128 → 256
-#     model.m_down3[4],  # 256 → 512
-#     model.m_up1[0],  # 128 → 64 (ConvTranspose2d)
-#     model.m_up2[0],  # 256 → 128
-#     model.m_up3[0],  # 512 → 256
-# ]
+transition_modules = [
+    model.m_down1[4],  # 64 → 128
+    model.m_down2[4],  # 128 → 256
+    model.m_down3[4],  # 256 → 512
+    model.m_up1[0],  # 128 → 64 (ConvTranspose2d)
+    model.m_up2[0],  # 256 → 128
+    model.m_up3[0],  # 512 → 256
+]
 
-# head_params = list(p for m in head_modules for p in m.parameters())
-# transition_params = list(p for m in transition_modules for p in m.parameters())
+head_params = list(p for m in head_modules for p in m.parameters())
+transition_params = list(p for m in transition_modules for p in m.parameters())
 
-# all_params = set(model.parameters())
-# used_params = set(head_params) | set(transition_params)
-# backbone_params = list(all_params - used_params)
-
-
-# optim = torch.optim.AdamW(
-#     [
-#         {"params": backbone_params, "lr": lr_init},
-#         {"params": transition_params, "lr": 2 * lr_init},
-#         {"params": head_params, "lr": 3 * lr_init},
-#     ],
-#     weight_decay=1e-6,
-# )
+all_params = set(model.parameters())
+used_params = set(head_params) | set(transition_params)
+backbone_params = list(all_params - used_params)
 
 
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-#     optimizer=optim,
-#     T_max=20000,
-#     eta_min=1e-9,  # safe floor
-# )
-
-optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=lr_init,
-    weight_decay=lr_init,
+optim = torch.optim.AdamW(
+    [
+        {"params": backbone_params, "lr": lr_init},
+        {"params": transition_params, "lr": 2 * lr_init},
+        {"params": head_params, "lr": 3 * lr_init},
+    ],
+    weight_decay=1e-6,
 )
 
 
-def lr_lambda(step):
-    # step=0 => factor=1, step=100k => factor=0.5, etc.
-    factor = 0.5 ** (step // 100_000)
-    # enforce minimum LR
-    min_lr_factor = 5e-7 / 1e-4
-    return max(factor, min_lr_factor)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer=optim,
+    T_max=100000,
+    eta_min=1e-9,  # safe floor
+)
+
+# optimizer = torch.optim.Adam(
+#     filter(lambda p: p.requires_grad, model.parameters()),
+#     lr=lr_init,
+#     weight_decay=lr_init,
+# )
 
 
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+# def lr_lambda(step):
+#     # step=0 => factor=1, step=100k => factor=0.5, etc.
+#     factor = 0.5 ** (step // 100_000)
+#     # enforce minimum LR
+#     min_lr_factor = 5e-7 / 1e-4
+#     return max(factor, min_lr_factor)
+
+
+# scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 n_epochs = 200
 
@@ -600,7 +600,7 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     epochs=n_epochs,
     device=device,
     filename=loc_weights,
-    optimizer=optimizer,
+    optimizer=optim,
     scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,

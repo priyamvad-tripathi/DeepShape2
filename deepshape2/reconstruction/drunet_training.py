@@ -46,13 +46,17 @@ else:
 CROP_SIZE = 128
 
 
+fac = 5
+
+lr_init = 10**-fac
+
+
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e4.pt"
+loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e{fac}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
-lr_init = 1e-4
 
 tqdm_kwargs = get_tqdm()
 # %% Denoiser Model Setup and data
@@ -562,18 +566,9 @@ optimizer = torch.optim.AdamW(
     weight_decay=1e-6,
 )
 
-optim = torch.optim.AdamW(
-    [
-        {"params": backbone_params, "lr": lr_init},
-        {"params": transition_params, "lr": 2 * lr_init},
-        {"params": head_params, "lr": 3 * lr_init},
-    ],
-    weight_decay=1e-6,
-)
-
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer=optim,
+    optimizer=optimizer,
     T_max=20000,
     eta_min=1e-9,  # safe floor
 )

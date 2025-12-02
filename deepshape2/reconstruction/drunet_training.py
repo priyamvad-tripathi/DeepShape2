@@ -43,12 +43,11 @@ else:
     subset_size = 10_000
 
 
-NITER = 10
-CROP_SIZE = 96
+CROP_SIZE = 128
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_dinv_{CROP_SIZE}.pt"
+loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -417,8 +416,6 @@ def predict_denoiser(
 
         with pbar:
             for nc, clean_batch in enumerate(val_loader):
-                if nc > 5:
-                    continue
                 pbar.update(1)
 
                 noisy, clean, sigma, norm_factor = process_batch(clean_batch, device)
@@ -537,7 +534,7 @@ def predict_denoiser(
 
 n_epochs = 201
 
-scheduler_params = {"factor": 0.5, "patience": 25, "min_lr": lr_init / (2**5)}
+scheduler_params = {"factor": 0.5, "patience": 5, "min_lr": 1e-8}
 
 
 optimizer = torch.optim.Adam(
@@ -547,16 +544,16 @@ optimizer = torch.optim.Adam(
 )
 
 
-def lr_lambda(step):
-    # step=0 => factor=1, step=100k => factor=0.5, etc.
-    factor = 0.5 ** (step // 100_000)
-    # enforce minimum LR
-    min_lr_factor = 5e-7 / 1e-4
-    return max(factor, min_lr_factor)
+# def lr_lambda(step):
+#     # step=0 => factor=1, step=50k => factor=0.5, etc.
+#     factor = 0.5 ** (step // 50_000)
+#     # enforce minimum LR
+#     min_lr_factor = 5e-7 / 1e-4
+#     return max(factor, min_lr_factor)
 
 
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-
+# scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_params)
 
 best_weights, train_loss_list, val_loss_list = train_denoiser(
     model,

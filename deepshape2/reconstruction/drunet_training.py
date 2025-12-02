@@ -557,18 +557,19 @@ all_params = set(model.parameters())
 used_params = set(head_params) | set(transition_params)
 backbone_params = list(all_params - used_params)
 
-optimizer = torch.optim.AdamW(
+
+optim = torch.optim.AdamW(
     [
-        {"params": head_params, "lr": lr_init * 0.1},
-        {"params": transition_params, "lr": lr_init},
-        {"params": backbone_params, "lr": lr_init * 0.3},
+        {"params": backbone_params, "lr": lr_init},
+        {"params": transition_params, "lr": 2 * lr_init},
+        {"params": head_params, "lr": 3 * lr_init},
     ],
     weight_decay=1e-6,
 )
 
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer=optimizer,
+    optimizer=optim,
     T_max=20000,
     eta_min=1e-9,  # safe floor
 )
@@ -599,7 +600,7 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     epochs=n_epochs,
     device=device,
     filename=loc_weights,
-    optimizer=optimizer,
+    optimizer=optim,
     scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,

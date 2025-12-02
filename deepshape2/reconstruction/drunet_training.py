@@ -52,7 +52,7 @@ loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}.pt"
 device = get_freest_gpu(set_device=True)
 set_seed()
 
-lr_init = 1e-4
+lr_init = 1e-5
 
 tqdm_kwargs = get_tqdm()
 # %% Denoiser Model Setup and data
@@ -195,7 +195,7 @@ def train_denoiser(
 
     # --- Training loop ---
     # mse = torch.nn.MSELoss()
-    mse = torch.nn.L1Loss(reduction="sum")
+    mse = torch.nn.L1Loss(reduction="mean")
 
     for epoch in range(epochs):
         if epoch < current_epoch:
@@ -232,8 +232,7 @@ def train_denoiser(
                 loss.backward()
 
                 optimizer.step()
-                if scheduler:
-                    scheduler.step()
+                scheduler.step()
 
                 # Logging
                 batch_losses.append(loss.detach().cpu())
@@ -532,28 +531,44 @@ def predict_denoiser(
 
 # %% Train the model and plot results
 
-n_epochs = 201
 
-scheduler_params = {"factor": 0.5, "patience": 5, "min_lr": 1e-8}
+head_params = list(model.m_head.parameters()) + list(model.m_tail.parameters())
+
+transition_params = []
+transition_params += list(model.m_down1[4].parameters())  # 64→128
+transition_params += list(model.m_down2[4].parameters())  # 128→256
+transition_params += list(model.m_down3[4].parameters())  # 256→512
+transition_params += list(model.m_up1[0].parameters())  # up 128→64
+transition_params += list(model.m_up2[0].parameters())  # up 256→128
+transition_params += list(model.m_up3[0].parameters())  # up 512→256
+
+# everything else = backbone blocks
+backbone_params = []
+for nm, module in model.named_modules():
+    if not nm.startswith("m_head") and not nm.startswith("m_tail"):
+        if not ("4)" in nm and ("down" in nm or "up" in nm)):  # filter out transitions
+            for p in module.parameters(recurse=False):
+                if p.requires_grad:
+                    backbone_params.append(p)
 
 
-optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=lr_init,
-    weight_decay=lr_init,
+optim = torch.optim.AdamW(
+    [
+        {"params": backbone_params, "lr": lr_init},
+        {"params": transition_params, "lr": 2 * lr_init},
+        {"params": head_params, "lr": 3 * lr_init},
+    ],
+    weight_decay=1e-6,
 )
 
 
-# def lr_lambda(step):
-#     # step=0 => factor=1, step=50k => factor=0.5, etc.
-#     factor = 0.5 ** (step // 50_000)
-#     # enforce minimum LR
-#     min_lr_factor = 5e-7 / 1e-4
-#     return max(factor, min_lr_factor)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer=optim,
+    T_max=20000,
+    eta_min=1e-9,  # safe floor
+)
 
-
-# scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_params)
+n_epochs = 200
 
 best_weights, train_loss_list, val_loss_list = train_denoiser(
     model,
@@ -562,7 +577,7 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     epochs=n_epochs,
     device=device,
     filename=loc_weights,
-    optimizer=optimizer,
+    optimizer=optim,
     scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,

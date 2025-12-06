@@ -26,8 +26,6 @@ from deepshape2.utils import (
 )
 from deepshape2.visualization import plot, plot_losses
 
-# from torch.utils.data.sampler import SubsetRandomSampler
-
 # %% Defaults and Configurations
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
@@ -46,13 +44,13 @@ else:
 CROP_SIZE = 128
 
 
-fac = 3
+fac = 4
 
 lr_init = 10**-fac
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + f"drunet_{CROP_SIZE}_1e{fac}.pt"
+loc_weights = MODEL_DIR + f"drunet_low_{CROP_SIZE}_1e{fac}.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -138,7 +136,7 @@ def process_batch(clean_batch, device):
     clean_scaled = clean / peak_vals
 
     # Add noise
-    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.3
+    noise_fac = torch.rand(N, 1, 1, 1, device=device) * 0.5
     noisy = clean_scaled + torch.randn_like(clean_scaled) * noise_fac
 
     # Normalise by image peak
@@ -570,26 +568,9 @@ optim = torch.optim.AdamW(
 
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer=optim,
-    T_max=100000,
+    T_max=20000,
     eta_min=1e-9,  # safe floor
 )
-
-# optimizer = torch.optim.Adam(
-#     filter(lambda p: p.requires_grad, model.parameters()),
-#     lr=lr_init,
-#     weight_decay=lr_init,
-# )
-
-
-# def lr_lambda(step):
-#     # step=0 => factor=1, step=100k => factor=0.5, etc.
-#     factor = 0.5 ** (step // 100_000)
-#     # enforce minimum LR
-#     min_lr_factor = 5e-7 / 1e-4
-#     return max(factor, min_lr_factor)
-
-
-# scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
 n_epochs = 200
 

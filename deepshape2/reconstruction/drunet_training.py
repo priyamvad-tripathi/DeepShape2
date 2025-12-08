@@ -1,5 +1,4 @@
 # %%Import Libraries
-import copy
 import math
 import os
 import time
@@ -328,10 +327,6 @@ def train_denoiser(
                     "train_loss_list": train_loss_list,
                     "lr_list": lr_list[1:],
                 }
-                if scheduler:
-                    checkpoint_data["scheduler_state_dict"] = copy.deepcopy(
-                        scheduler.state_dict()
-                    )
                 time_elapsed = time_string(time.time() - start_time)
                 print(
                     f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1} at {time_elapsed}"

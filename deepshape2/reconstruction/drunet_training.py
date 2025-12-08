@@ -44,9 +44,7 @@ else:
 CROP_SIZE = 128
 
 
-fac = 5
-
-lr_init = 10**-fac
+lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"

@@ -48,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_flexi_ds.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -133,7 +133,8 @@ def process_batch(clean_batch, device, epoch=20, max_epoch=20):
     clean_scaled = clean / peak_vals
 
     # Curriculum schedule: gradually increase noise range
-    alpha = min(1.0, epoch / max_epoch)  # 0 → 1
+    # alpha = min(1.0, epoch / max_epoch)  # 0 → 1
+    alpha = 1.0
     max_noise = 0.2 + 0.4 * alpha  # ramps from 0.2 to 0.6
 
     noise_fac = torch.rand(N, 1, 1, 1, device=device) * max_noise

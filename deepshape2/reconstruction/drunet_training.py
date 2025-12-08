@@ -1,4 +1,5 @@
 # %%Import Libraries
+import copy
 import os
 import time
 
@@ -47,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_new.pt"
+loc_weights = MODEL_DIR + "drunet_fine_6.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -117,7 +118,7 @@ model = model.to(device)
 # %% Define Training and Testing Function
 
 
-def process_batch(clean_batch, device, epoch=20, max_epoch=20):
+def process_batch(clean_batch, device):
     clean = clean_batch.to(device, non_blocking=True).float()
     N = clean.size(0)
 
@@ -131,10 +132,7 @@ def process_batch(clean_batch, device, epoch=20, max_epoch=20):
     peak_vals = clean.amax(dim=(1, 2, 3), keepdim=True)
     clean_scaled = clean / peak_vals
 
-    # Curriculum schedule: gradually increase noise range
-    # alpha = min(1.0, epoch / max_epoch)  # 0 → 1
-    alpha = 1
-    max_noise = 0.2 + 0.5 * alpha  # ramps from 0.2 to 0.7
+    max_noise = 0.6
 
     noise_fac = torch.rand(N, 1, 1, 1, device=device) * max_noise
 
@@ -224,9 +222,7 @@ def train_denoiser(
         with pbar:
             for clean_batch in train_loader:
                 # Prepare batch
-                noisy, clean, sigma, *_ = process_batch(
-                    clean_batch, device, epoch=epoch
-                )
+                noisy, clean, sigma, *_ = process_batch(clean_batch, device)
 
                 # ---------------------------
                 # Model forward + loss
@@ -325,7 +321,9 @@ def train_denoiser(
                     "val_loss_list": val_loss_list,
                     "train_loss_list": train_loss_list,
                     "lr_list": lr_list[1:],
+                    "scheduler_state_dict": copy.deepcopy(scheduler.state_dict()),
                 }
+
                 time_elapsed = time_string(time.time() - start_time)
                 print(
                     f"Saving {'final' if is_final_epoch else 'intermediate'} checkpoint at Epoch {epoch + 1} at {time_elapsed}"
@@ -573,7 +571,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
 )
 
 
-n_epochs = 50
+n_epochs = 40
 
 best_weights, train_loss_list, val_loss_list = train_denoiser(
     model,

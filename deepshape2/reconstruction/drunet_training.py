@@ -1,5 +1,4 @@
 # %%Import Libraries
-import math
 import os
 import time
 
@@ -7,7 +6,6 @@ import numpy as np
 import torch
 from colorist import Color
 from deepinv.models import DRUNet as DinvDRUNet
-from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import DenoiseDataset, RandomSubsetSampler
@@ -49,7 +47,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_flexi.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow_flexi_ds.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -567,76 +565,12 @@ optim = torch.optim.AdamW(
 )
 
 
-class WarmupCosineScheduler:
-    def __init__(
-        self,
-        optimizer: Optimizer,
-        warmup_steps: int,
-        total_steps: int,
-        min_lr: float = 0.0,
-        last_step: int = -1,
-    ):
-        """
-        Warmup + Cosine Annealing LR scheduler.
-
-        Args:
-            optimizer: torch optimizer
-            warmup_steps: number of warmup iterations
-            total_steps: total number of iterations (warmup + cosine)
-            min_lr: final learning rate floor
-            last_step: internal counter (leave -1)
-        """
-        self.optimizer = optimizer
-        self.warmup_steps = warmup_steps
-        self.total_steps = total_steps
-        self.min_lr = min_lr
-
-        # Remember the base LR for each param group
-        self.base_lrs = [pg["lr"] for pg in optimizer.param_groups]
-
-        self.last_step = last_step
-        self.step()
-
-    def get_lr(self):
-        step = self.last_step
-
-        # -------------------------
-        # 1. Warmup phase
-        # -------------------------
-        if step < self.warmup_steps:
-            warmup_factor = step / float(max(1, self.warmup_steps))
-            return [base_lr * warmup_factor for base_lr in self.base_lrs]
-
-        # -------------------------
-        # 2. Cosine decay phase
-        # -------------------------
-        progress = (step - self.warmup_steps) / float(
-            max(1, self.total_steps - self.warmup_steps)
-        )
-        cosine_factor = 0.5 * (1 + math.cos(math.pi * progress))
-
-        return [
-            self.min_lr + (base_lr - self.min_lr) * cosine_factor
-            for base_lr in self.base_lrs
-        ]
-
-    def step(self):
-        """Update optimizer learning rates."""
-        self.last_step += 1
-        lr_list = self.get_lr()
-        for pg, lr in zip(self.optimizer.param_groups, lr_list):
-            pg["lr"] = lr
-
-
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-#     optimizer=optim,
-#     T_max=20000,
-#     eta_min=1e-9,  # safe floor
-# )
-
-scheduler = WarmupCosineScheduler(
-    optim, warmup_steps=2000, total_steps=20000, min_lr=5e-8
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer=optim,
+    T_max=20000,
+    eta_min=1e-9,  # safe floor
 )
+
 
 n_epochs = 50
 

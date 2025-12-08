@@ -569,7 +569,7 @@ optim = torch.optim.AdamW(
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer=optim,
     T_max=20000,
-    eta_min=1e-7,  # safe floor
+    eta_min=1e-9,  # safe floor
 )
 
 

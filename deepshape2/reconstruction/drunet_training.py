@@ -34,7 +34,7 @@ TQDM_FLAG = cfg["TQDM"]
 
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
-    BATCH_SIZE = 96
+    BATCH_SIZE = 128
     subset_size = 150_000
 else:
     BATCH_SIZE = 16

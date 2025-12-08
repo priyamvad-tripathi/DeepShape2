@@ -134,7 +134,7 @@ def process_batch(clean_batch, device, epoch=20, max_epoch=20):
 
     # Curriculum schedule: gradually increase noise range
     alpha = min(1.0, epoch / max_epoch)  # 0 → 1
-    max_noise = 0.2 + 0.5 * alpha  # ramps from 0.2 to 0.7
+    max_noise = 0.2 + 0.4 * alpha  # ramps from 0.2 to 0.6
 
     noise_fac = torch.rand(N, 1, 1, 1, device=device) * max_noise
 

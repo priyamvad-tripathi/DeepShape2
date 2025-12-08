@@ -34,7 +34,7 @@ TQDM_FLAG = cfg["TQDM"]
 
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
-    BATCH_SIZE = 32
+    BATCH_SIZE = 96
     subset_size = 150_000
 else:
     BATCH_SIZE = 16
@@ -48,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow_96.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()

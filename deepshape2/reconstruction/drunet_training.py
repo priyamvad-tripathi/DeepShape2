@@ -34,7 +34,7 @@ TQDM_FLAG = cfg["TQDM"]
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
     BATCH_SIZE = 32
-    subset_size = 150_000
+    subset_size = 100_000
 else:
     BATCH_SIZE = 16
     subset_size = 10_000
@@ -47,7 +47,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_flexi_ds.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow_new.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -132,7 +132,8 @@ def process_batch(clean_batch, device, epoch=20, max_epoch=20):
     clean_scaled = clean / peak_vals
 
     # Curriculum schedule: gradually increase noise range
-    alpha = min(1.0, epoch / max_epoch)  # 0 → 1
+    # alpha = min(1.0, epoch / max_epoch)  # 0 → 1
+    alpha = 1
     max_noise = 0.2 + 0.5 * alpha  # ramps from 0.2 to 0.7
 
     noise_fac = torch.rand(N, 1, 1, 1, device=device) * max_noise
@@ -568,7 +569,7 @@ optim = torch.optim.AdamW(
 scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     optimizer=optim,
     T_max=20000,
-    eta_min=1e-9,  # safe floor
+    eta_min=1e-7,  # safe floor
 )
 
 

@@ -10,7 +10,6 @@ from deepshape2.models import VAE
 from deepshape2.reconstruction import reconstruct_facets, residual_facet_image
 from deepshape2.utils import (
     blendedness,
-    chi2_dirty,
     extract_image,
     get_freest_gpu,
     load_config,
@@ -54,14 +53,12 @@ vis = create_visibility_from_ms(os.path.join(DATA_DIR, "MS/vis_deep_set_patch_00
 ]
 
 # %% Select Sources
-mask = flux > 50e-6  # Select bright enough sources
+mask = flux > 25e-6  # Select bright enough sources
 
 isolated_stamps = data["patch_000/isolated_stamps"][:]
 blended_stamps = data["patch_000/blended_stamps"][:]
 peak = isolated_stamps.max(axis=(1, 2))
 
-
-mask = peak > 0.71e-06
 
 # Random subset of sources to visualize
 np.random.seed(42)
@@ -74,9 +71,13 @@ psf = facet_data[f"deep/facets_{GRID_SIZE}/psf"][:][inds]
 blend = blended_stamps[inds]
 iso = isolated_stamps[inds]
 
-recon, decon = reconstruct_facets(
-    dirty, psf, device, num_workers=4, deblender=deblender
+
+result = reconstruct_facets(
+    dirty, psf, device, num_workers=4, deblender=deblender, do_chi2=True
 )
+recon = result["recon"].copy()
+decon = result["decon"].copy()
+chi2 = result["chi2"].copy()
 
 residuals = [
     residual_facet_image(vis, dec, galaxy_locations[inds[i]])
@@ -95,7 +96,6 @@ ssim_vals_2 = ssim_batch(extract_image(iso, 100), extract_image(decon, 100))
 metrics_str_2 = [f"{p:.02f} dB / {s:.03f}" for p, s in zip(psnr_vals_2, ssim_vals_2)]
 
 
-chi2, res = chi2_dirty(extract_image(dirty), extract_image(decon), extract_image(psf))
 metrics_res = [f"{c:.3f}" for c in chi2]
 
 metrics_str = [f"{p:.02f} dB / {sd:.03f}" for p, sd in zip(psnr_vals, shape_diff)]

@@ -5,7 +5,7 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from deepshape2.data.loaders import CenterCrop
 from deepshape2.models import create_model
-from deepshape2.utils import get_progress_bar, get_tqdm, load_config
+from deepshape2.utils import chi2_dirty, get_progress_bar, get_tqdm, load_config
 
 tqdm_kwargs = get_tqdm()
 
@@ -21,11 +21,12 @@ __all__ = ["reconstruct_facets"]
 def reconstruct_facets(
     dirty_all,
     psf_all,
-    device,
+    device="cpu",
     hqs_params={},
     bsize=64,
     num_workers=4,
     deblender=None,
+    do_chi2=False,
 ):
     """
     Reconstruct all facets using HQS-PnP model in batches.
@@ -67,6 +68,7 @@ def reconstruct_facets(
     # --- Save reconstructions
     recon_all = []
     decon_all = []
+    chi2_all = []
 
     # --- Batch reconstruction with progress bar
     with torch.inference_mode():
@@ -75,6 +77,10 @@ def reconstruct_facets(
         for batch in loader:
             im = batch[0].to(device, non_blocking=True)
             decon = model(im)
+
+            if do_chi2:
+                chi2, res = chi2_dirty(im[:, :1], decon, im[:, 1:])
+                chi2_all.append(chi2.cpu().numpy())
 
             if deblender is not None:
                 decon_crop = crop_fn(decon)
@@ -92,7 +98,15 @@ def reconstruct_facets(
             pbar.update(1)
         pbar.close()
 
+    result = {}
+
+    result["recon"] = np.concatenate(recon_all, axis=0)
+
+    # include chi2 if requested
+    if do_chi2:
+        result["chi2"] = np.concatenate(chi2_all, axis=0)
+
     if deblender is not None:
-        return np.concatenate(recon_all, axis=0), np.concatenate(decon_all, axis=0)
-    else:
-        return np.concatenate(recon_all, axis=0)
+        result["decon"] = np.concatenate(decon_all, axis=0)
+
+    return result

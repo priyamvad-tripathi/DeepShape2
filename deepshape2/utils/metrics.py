@@ -150,8 +150,9 @@ def chi2_dirty(dirty, decon, psf, sigma=0.71e-6):
     sigma: float (noise std)
     Returns:
         chi2: [N]
-        residual: [N,1,H,W]
+        residual: [N,,H,W]
     """
+
     N, _, H, W = dirty.shape
     pad_y = H // 2
     pad_x = W // 2

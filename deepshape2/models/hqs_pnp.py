@@ -1,6 +1,4 @@
 # %%Import Libraries
-import os
-
 import numpy as np
 import torch
 import torch.nn as nn
@@ -11,6 +9,8 @@ from torch.fft import fft2, ifft2, ifftshift
 from deepshape2.utils import load_config
 
 cfg = load_config()
+
+__all__ = ["HQS_PnP", "create_model"]
 
 
 # %% Load Model
@@ -86,34 +86,21 @@ DEF_f1 = 0.1414
 DEF_f2 = 1.9979
 DEF_falpha = 3.9949
 
-# Predefined locations to check for weights
-WEIGHT_PATH = cfg["MODEL_DIR"] + "drunet_deepinv_gray_finetune_26k.pth"
 
-
-def resolve_pretrained_path():
-    """
-    Returns the first existing weight file path from predefined locations.
-    If none exists, returns 'download' to automatically download weights.
-    """
-    if os.path.exists(WEIGHT_PATH):
-        return WEIGHT_PATH
-    return "download"
-
-
-def create_model(device, path=None, **hqs_params):
+def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine.pt", **hqs_params):
     """
     Creates HQS_PnP model with DRUNet denoiser.
 
     If `path` is provided, loads checkpoint weights from there.
-    Otherwise, uses pretrained weights from predefined locations or downloads them.
+    Otherwise, download pretrained weights from DeepInv.
     """
-    pretrained_path = resolve_pretrained_path()
-
-    denoiser = DRUNet(
-        in_channels=1, out_channels=1, pretrained=pretrained_path, device=device
-    )
-
-    if path is not None:
+    if path is None:
+        print("Downloading pretrained weights from DeepInv.")
+        denoiser = DRUNet(
+            in_channels=1, out_channels=1, pretrained="download", device=device
+        )
+    else:
+        denoiser = DRUNet(in_channels=1, out_channels=1, pretrained=None, device=device)
         ckpt = torch.load(path, map_location=device, weights_only=False)
         denoiser.load_state_dict(ckpt["best_weights"])
 

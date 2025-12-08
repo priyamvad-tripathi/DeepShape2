@@ -33,14 +33,6 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Sky simulation arguments")
 
     parser.add_argument(
-        "-f",
-        "--facet-size",
-        type=int,
-        default=256,
-        help="Facet size (default: 256)",
-    )
-
-    parser.add_argument(
         "-fl",
         "--flux",
         type=int,
@@ -203,12 +195,10 @@ def evaluate_best_params(
 # %% Main Execution
 if __name__ == "__main__":
     args = parse_args()
-    GRID_SIZE = args.facet_size
     BATCH_SIZE = args.batch_size
     MIN_FLUX = args.flux
     N_TRIALS = args.n_trials
 
-    GRID_SIZE = 128
     BATCH_SIZE = 512
     MIN_FLUX = 50
 
@@ -216,7 +206,7 @@ if __name__ == "__main__":
     cfg = load_config()
     DATA_DIR = cfg["DATA_DIR"]
     facet_data = load_h5(DATA_DIR + "facets.h5")
-    data = load_h5(DATA_DIR + "deep_set.h5")
+    data = load_h5(DATA_DIR + "wide_set.h5")
 
     # --- Torch setup
     device = get_freest_gpu(set_device=True)
@@ -229,20 +219,19 @@ if __name__ == "__main__":
     )
 
     # Dataset setup
-    dirty_all = facet_data[f"deep/facets_{GRID_SIZE}/dirty"][:]
-    psf = facet_data[f"deep/facets_{GRID_SIZE}/psf"][:]
+    dirty_all = facet_data["wide/facets_128/dirty"][:]
+    psf = facet_data["wide/facets_128/psf"][:]
     im_all = np.stack([dirty_all, psf], axis=1)
 
-    blended_stamps = extract_image(data["patch_000/blended_stamps"][:])
+    blended_stamps = extract_image(data["patch_051/blended_stamps"][:])
 
     im_all_t = torch.from_numpy(im_all)
     stamps_t = torch.from_numpy(blended_stamps)
 
     # Create subset for validation set for Optuna
-    # peak = facet_data["wide/peak"][:]
-    mask1 = np.where(facet_data["deep/flux"][:] > MIN_FLUX * 1e-06)[0]
-    mask2 = np.where(facet_data["deep/peak"][:] > 0.71e-06 / 3)[0]
-    mask = np.intersect1d(mask1, mask2)
+    mask = np.where(facet_data["wide/flux"][:] > MIN_FLUX * 1e-06)[0]
+    # mask2 = np.where(facet_data["deep/peak"][:] > 0.71e-06 / 3)[0]
+    # mask = np.intersect1d(mask1, mask2)
 
     # Limit to at most 1000 samples
     max_samples = 1000
@@ -252,17 +241,9 @@ if __name__ == "__main__":
     rand_indices = np.random.choice(mask, size=num_samples, replace=False)
 
     # Create TensorDataset with selected samples
-    dataset_all = TensorDataset(im_all_t[mask], stamps_t[mask])
     dataset_subset = TensorDataset(im_all_t[rand_indices], stamps_t[rand_indices])
 
-    val_loader_all = DataLoader(
-        dataset_all,
-        batch_size=BATCH_SIZE,
-        shuffle=False,
-        num_workers=4,
-        pin_memory=True,
-    )
-    val_loader_subset = DataLoader(
+    val_loader = DataLoader(
         dataset_subset,
         batch_size=BATCH_SIZE,
         shuffle=False,
@@ -271,7 +252,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = f"facets_{GRID_SIZE}_peak_flux_{MIN_FLUX}"
+    study_name = f"facets_flux_{MIN_FLUX}"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(
@@ -283,7 +264,7 @@ if __name__ == "__main__":
 
     start = time.time()
     study.optimize(
-        lambda trial: objective(trial, device, val_loader_subset),
+        lambda trial: objective(trial, device, val_loader),
         n_trials=N_TRIALS,
     )
 
@@ -296,7 +277,7 @@ if __name__ == "__main__":
     print("Best Parameters:", study.best_params)
 
     # --- Evaluate and plot
-    evaluate_best_params(val_loader_all, study.best_params, device)
+    evaluate_best_params(val_loader, study.best_params, device)
 
     # --- Optuna visualization
     fig1 = optuna.visualization.plot_parallel_coordinate(study)

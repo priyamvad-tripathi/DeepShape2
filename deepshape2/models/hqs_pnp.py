@@ -87,7 +87,7 @@ DEF_f2 = 1.9979
 DEF_falpha = 3.9949
 
 
-def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine.pt", **hqs_params):
+def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine_tuned.pt", **hqs_params):
     """
     Creates HQS_PnP model with DRUNet denoiser.
 

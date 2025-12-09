@@ -48,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_new.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow_mix.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -177,6 +177,9 @@ def train_denoiser(
     scheduler = kwargs.get("scheduler", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
+    steps_to_min = kwargs.get("steps_to_min", 0)
+    cosine = kwargs.get("cosine", None)
+    tail = kwargs.get("tail", None)
 
     print(f"Running on device: {device}")
 
@@ -199,6 +202,7 @@ def train_denoiser(
     # mse = torch.nn.MSELoss()
     mse = torch.nn.L1Loss(reduction="mean")
 
+    global_step = 0
     for epoch in range(epochs):
         if epoch < current_epoch:
             continue
@@ -234,7 +238,13 @@ def train_denoiser(
                 loss.backward()
 
                 optimizer.step()
-                scheduler.step()
+
+                global_step += 1
+                if global_step < steps_to_min:
+                    cosine.step()
+                else:
+                    tail.step()
+                # scheduler.step()
 
                 # Logging
                 batch_losses.append(loss.detach().cpu())
@@ -565,9 +575,23 @@ optim = torch.optim.AdamW(
 scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
     optim, T_0=20000, T_mult=10**9, eta_min=1e-9
 )
-
-
 n_epochs = 40
+
+steps_per_epoch = len(train_loader)  # here ≈ 150000 / 32 ≈ 4687
+total_steps = steps_per_epoch * n_epochs
+steps_to_min = total_steps // 2  # or wherever your valley is
+
+cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optim,
+    T_max=steps_to_min,
+    eta_min=1e-6,  # the minimum you want at the valley
+)
+
+tail = torch.optim.lr_scheduler.ExponentialLR(
+    optim,
+    gamma=0.99,  # slow monotonic decay after the valley
+)
+
 
 best_weights, train_loss_list, val_loss_list = train_denoiser(
     model,
@@ -580,6 +604,9 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,
+    steps_to_min=steps_to_min,
+    cosine=cosine,
+    tail=tail,
 )
 
 

@@ -177,8 +177,6 @@ def train_denoiser(
     scheduler = kwargs.get("scheduler", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
-    steps_to_min = kwargs.get("steps_to_min", 0)
-    cosine = kwargs.get("cosine", None)
     tail = kwargs.get("tail", None)
 
     print(f"Running on device: {device}")
@@ -240,8 +238,8 @@ def train_denoiser(
                 optimizer.step()
 
                 global_step += 1
-                if global_step < steps_to_min:
-                    cosine.step()
+                if global_step < 20000:
+                    scheduler.step()
                 else:
                     tail.step()
                 # scheduler.step()
@@ -567,25 +565,13 @@ optim = torch.optim.AdamW(
 )
 
 
-# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-#     optimizer=optim,
-#     T_max=20000,
-#     eta_min=1e-9,  # safe floor
-# )
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    optim, T_0=20000, T_mult=10**9, eta_min=1e-9
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+    optimizer=optim,
+    T_max=20000,
+    eta_min=1e-9,  # safe floor
 )
 n_epochs = 40
 
-steps_per_epoch = len(train_loader)  # here ≈ 150000 / 32 ≈ 4687
-total_steps = steps_per_epoch * n_epochs
-steps_to_min = total_steps // 2  # or wherever your valley is
-
-cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optim,
-    T_max=steps_to_min,
-    eta_min=1e-6,  # the minimum you want at the valley
-)
 
 tail = torch.optim.lr_scheduler.ExponentialLR(
     optim,
@@ -601,11 +587,9 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     device=device,
     filename=loc_weights,
     optimizer=optim,
-    scheduler=scheduler,
     save_freq=1,
     tqdm_enabled=False,
-    steps_to_min=steps_to_min,
-    cosine=cosine,
+    scheduler=scheduler,
     tail=tail,
 )
 

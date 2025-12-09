@@ -34,7 +34,7 @@ TQDM_FLAG = cfg["TQDM"]
 
 run_env = os.getenv("RUN_ENV", "local")
 if run_env == "genci":
-    BATCH_SIZE = 128
+    BATCH_SIZE = 32
     subset_size = 150_000
 else:
     BATCH_SIZE = 16
@@ -48,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_96.pt"
+loc_weights = MODEL_DIR + "drunet_fine_vlow_new.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -118,7 +118,7 @@ model = model.to(device)
 # %% Define Training and Testing Function
 
 
-def process_batch(clean_batch, device, epoch=20, max_epoch=20):
+def process_batch(clean_batch, device):
     clean = clean_batch.to(device, non_blocking=True).float()
     N = clean.size(0)
 
@@ -132,10 +132,7 @@ def process_batch(clean_batch, device, epoch=20, max_epoch=20):
     peak_vals = clean.amax(dim=(1, 2, 3), keepdim=True)
     clean_scaled = clean / peak_vals
 
-    # Curriculum schedule: gradually increase noise range
-    # alpha = min(1.0, epoch / max_epoch)  # 0 → 1
-    alpha = 1.0
-    max_noise = 0.2 + 0.4 * alpha  # ramps from 0.2 to 0.6
+    max_noise = 0.6
 
     noise_fac = torch.rand(N, 1, 1, 1, device=device) * max_noise
 
@@ -225,9 +222,7 @@ def train_denoiser(
         with pbar:
             for clean_batch in train_loader:
                 # Prepare batch
-                noisy, clean, sigma, *_ = process_batch(
-                    clean_batch, device, epoch=epoch
-                )
+                noisy, clean, sigma, *_ = process_batch(clean_batch, device)
 
                 # ---------------------------
                 # Model forward + loss
@@ -267,13 +262,6 @@ def train_denoiser(
                     line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
                 print(line0)
                 line = f"Train Loss: {epoch_loss:.{precision}e} "
-
-            # updates = [
-            #     ((p.detach() - pb).norm().item())
-            #     for p, pb in zip(model.parameters(), params_before)
-            #     if p.requires_grad
-            # ]
-            # print("mean update norm:", np.mean(updates), "max:", np.max(updates))
 
             # --- Validation ---
             if val_loader:
@@ -569,10 +557,13 @@ optim = torch.optim.AdamW(
 )
 
 
-scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    optimizer=optim,
-    T_max=20000,
-    eta_min=1e-9,  # safe floor
+# scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+#     optimizer=optim,
+#     T_max=20000,
+#     eta_min=1e-9,  # safe floor
+# )
+scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    optim, T_0=20000, T_mult=10**9, eta_min=1e-9
 )
 
 

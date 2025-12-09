@@ -48,7 +48,7 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_vlow_mix.pt"
+loc_weights = MODEL_DIR + "drunet_fine_tuned.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -177,7 +177,6 @@ def train_denoiser(
     scheduler = kwargs.get("scheduler", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
-    tail = kwargs.get("tail", None)
 
     print(f"Running on device: {device}")
 
@@ -240,9 +239,6 @@ def train_denoiser(
                 global_step += 1
                 if global_step < 20000:
                     scheduler.step()
-                else:
-                    tail.step()
-                # scheduler.step()
 
                 # Logging
                 batch_losses.append(loss.detach().cpu())
@@ -570,13 +566,7 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
     T_max=20000,
     eta_min=1e-9,  # safe floor
 )
-n_epochs = 40
-
-
-tail = torch.optim.lr_scheduler.ExponentialLR(
-    optim,
-    gamma=0.99,  # slow monotonic decay after the valley
-)
+n_epochs = 15
 
 
 best_weights, train_loss_list, val_loss_list = train_denoiser(
@@ -588,9 +578,7 @@ best_weights, train_loss_list, val_loss_list = train_denoiser(
     filename=loc_weights,
     optimizer=optim,
     save_freq=1,
-    tqdm_enabled=False,
     scheduler=scheduler,
-    tail=tail,
 )
 
 

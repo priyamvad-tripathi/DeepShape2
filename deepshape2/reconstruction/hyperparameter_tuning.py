@@ -5,12 +5,14 @@ import time
 
 import numpy as np
 import optuna
+import pandas as pd
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from deepshape2.models import VAE, create_model
 from deepshape2.utils import (
-    chi2_dirty,
+    blendedness,
+    correlations,
     extract_image,
     get_freest_gpu,
     get_progress_bar,
@@ -113,8 +115,7 @@ def evaluate_best_params(
     model.eval()
 
     # --- Metric and image containers ---
-    psnr_all, chi2_all = [], []
-    isolated_stamps, blended_stamps, inputs, decon_all, recon_all, res_all = (
+    isolated_stamps, blended_stamps, inputs, decon_all, recon_all, psnr_all = (
         [],
         [],
         [],
@@ -142,16 +143,12 @@ def evaluate_best_params(
             psnr_val = psnr_torch(recon, iso.unsqueeze(1))
             psnr_all.append(psnr_val.cpu().numpy())
 
-            chi2, res = chi2_dirty(im[:, :1], decon, im[:, 1:])
-            chi2_all.append(chi2.cpu().numpy())
-
             # --- Store reconstructions and inputs ---
             isolated_stamps.append(iso.cpu().numpy().squeeze())
             blended_stamps.append(bl.numpy().squeeze())
             decon_all.append(decon.cpu().numpy().squeeze())
             recon_all.append(recon.cpu().numpy().squeeze())
             inputs.append(im[:, 0].cpu().numpy())
-            res_all.append(res.cpu().numpy().squeeze())
 
             pbar.update(1)
 
@@ -161,8 +158,6 @@ def evaluate_best_params(
     inputs = np.concatenate(inputs)
     recon_all = np.concatenate(recon_all)
     decon_all = np.concatenate(decon_all)
-    chi2_all = np.concatenate(chi2_all)
-    res_all = np.concatenate(res_all)
     psnr_all = np.concatenate(psnr_all)
 
     # --- Compute SSIM ---
@@ -175,20 +170,15 @@ def evaluate_best_params(
     print(
         f"PSNR: Max {psnr_all.max():.3f} dB | Min {psnr_all.min():.3f} dB | Mean {psnr_all.mean():.3f} dB"
     )
-    print(
-        f"Chi2: Min {chi2_all.min():.3f} | Max {chi2_all.max():.3f} | Mean {chi2_all.mean():.3f}"
-    )
 
     results = {
         "ssim": ssim_all,
         "psnr": psnr_all,
-        "chi2": chi2_all,
         "isolated_stamps": isolated_stamps,
         "blended_stamps": blended_stamps,
         "inputs": inputs,
         "decon_all": decon_all,
         "recon_all": recon_all,
-        "res_all": res_all,
     }
 
     # --- Visualization ---
@@ -201,7 +191,6 @@ def evaluate_best_params(
         metric_labels = [
             f"{s:.2f}/{p:.2f} dB" for s, p in zip(ssim_all[inds], psnr_all[inds])
         ]
-        chi2_labels = [f"{c:.3f}" for c in chi2_all[inds]]
 
         plot(
             images=[
@@ -209,7 +198,6 @@ def evaluate_best_params(
                 blended_stamps[inds],
                 inputs[inds],
                 decon_all[inds],
-                res_all[inds],
                 recon_all[inds],
             ],
             caption=[
@@ -217,7 +205,6 @@ def evaluate_best_params(
                 "Blended",
                 "Dirty",
                 "Deconvolved",
-                "Residual",
                 "Reconstructed",
             ],
             cbar=True,
@@ -226,10 +213,9 @@ def evaluate_best_params(
                 subtitles,
                 subtitles,
                 subtitles,
-                chi2_labels,
                 metric_labels,
             ],
-            same_scale=[0, 1, 3, 5],
+            same_scale=[0, 1],
             scale_row=0,
         )
     return results
@@ -274,9 +260,9 @@ if __name__ == "__main__":
     isolated_stamps = extract_image(data["patch_051/isolated_stamps"][:])
     blended_stamps = extract_image(data["patch_051/blended_stamps"][:])
 
-    im_all_t = torch.from_numpy(im_all)
-    stamps_is = torch.from_numpy(isolated_stamps)
-    stamps_bl = torch.from_numpy(blended_stamps)
+    im_all_T = torch.from_numpy(im_all)
+    isolated_stamps_T = torch.from_numpy(isolated_stamps)
+    blended_stamps_T = torch.from_numpy(blended_stamps)
 
     # Create subset for validation set for Optuna
     mask = np.where(facet_data["wide/flux"][:] > MIN_FLUX * 1e-06)[0]
@@ -292,7 +278,9 @@ if __name__ == "__main__":
 
     # Create TensorDataset with selected samples
     dataset_subset = TensorDataset(
-        im_all_t[rand_indices], stamps_is[rand_indices], stamps_bl[rand_indices]
+        im_all_T[rand_indices],
+        isolated_stamps_T[rand_indices],
+        blended_stamps_T[rand_indices],
     )
 
     val_loader = DataLoader(
@@ -331,6 +319,27 @@ if __name__ == "__main__":
     # --- Evaluate and plot
     best_results = evaluate_best_params(
         val_loader, study.best_params, device, deblender
+    )
+
+    df = pd.DataFrame.from_records(data["patch_051/patch_df"][()])
+    flux_mask = df["flux_mask"].values
+    param_dict = {
+        "flux": df["flux"].values[flux_mask][rand_indices] * 1e6,
+        "size": df["size"].values[flux_mask][rand_indices],
+        "peak": np.max(isolated_stamps[rand_indices], axis=(1, 2)),
+        "blendedness": blendedness(
+            isolated_stamps[rand_indices], blended_stamps[rand_indices]
+        ),
+        "sersic": df["sersic_index"].values[flux_mask][rand_indices],
+        "dist": (
+            (df["pix_x"].values[flux_mask][rand_indices] - 25200 // 2) ** 2
+            + (df["pix_y"].values[flux_mask][rand_indices] - 25200 // 2) ** 2
+        )
+        ** 0.5,
+    }
+    correlations(
+        param_dict,
+        [best_results["psnr"], best_results["ssim"]],
     )
 
     # --- Optuna visualization

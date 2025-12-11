@@ -23,7 +23,7 @@ def reconstruct_facets(
     psf_all,
     device="cpu",
     hqs_params={},
-    bsize=64,
+    bsize=640,
     num_workers=4,
     deblender=None,
     do_chi2=False,

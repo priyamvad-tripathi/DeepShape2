@@ -1,10 +1,15 @@
 # %% Import modules
+import matplotlib.pyplot as plt
 import numpy as np
+import pandas as pd
+import seaborn as sns
 import torch
 import torch.nn.functional as F
 
 # from scipy.signal import convolve2d
 from skimage.metrics import structural_similarity as ssim
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
 from torch.fft import fft2, ifft2, ifftshift
 
 __all__ = [
@@ -14,6 +19,7 @@ __all__ = [
     "contamination",
     "psnr_torch",
     "chi2_dirty",
+    "correlations",
 ]
 
 
@@ -178,3 +184,51 @@ def chi2_dirty(dirty, decon, psf, sigma=0.71e-6):
     chi2 = (residual**2).sum(dim=(1, 2, 3)) / (H * W * sigma**2)
 
     return chi2, residual
+
+
+# %%
+def correlations(
+    param_dict, metrics_list, metrics_names=["PSNR", "SSIM"], rf=True, lr=True
+):
+    param_names = list(param_dict.keys())
+
+    # ---------------------------
+    # Build dataframe
+    # ---------------------------
+    data = {name: arr for name, arr in param_dict.items()}
+    data.update({name: arr for name, arr in zip(metrics_names, metrics_list)})
+    df = pd.DataFrame(data)
+
+    # ---------------------------
+    # 1. Correlations with all metrics
+    # ---------------------------
+    corr = df.corr(method="spearman")[metrics_names].loc[param_names]
+
+    plt.figure(figsize=(0.5 * len(param_names) + 3, 2 * len(metrics_names)))
+    sns.heatmap(corr.T, annot=True, cmap="coolwarm", center=0, cbar=True)
+    plt.title("Correlations (Inputs vs Metrics)")
+    plt.show()
+
+    # ---------------------------
+    # 2. Feature importance via Random Forest (per metric)
+    # ---------------------------
+    if rf:
+        X = df[param_names]
+        for metric in metrics_names:
+            y = df[metric]
+            rf = RandomForestRegressor(random_state=0)
+            rf.fit(X, y)
+            print(f"\nRandomForest feature importances for {metric}:")
+            for feat, imp in zip(X.columns, rf.feature_importances_):
+                print(f"{feat}: {imp:.3f}")
+
+    # ---------------------------
+    # 3. Linear regression coefficients (per metric)
+    # ---------------------------
+    if lr:
+        for metric in metrics_names:
+            y = df[metric]
+            lr = LinearRegression().fit(X, y)
+            print(f"\nLinear regression coefficients for {metric}:")
+            for feat, coef in zip(X.columns, lr.coef_):
+                print(f"{feat}: {coef:.3f}")

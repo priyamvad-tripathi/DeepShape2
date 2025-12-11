@@ -18,7 +18,7 @@ denoiser = denoiser.eval()
 
 
 ckpt = torch.load(
-    "/scratch/tripathi/DS2/Model_weights/drunet_128.pt",
+    "/scratch/tripathi/DS2/Model_weights/drunet_fine_tuned.pt",
     map_location=device,
     weights_only=False,
 )
@@ -28,7 +28,7 @@ denoiser.load_state_dict(ckpt["best_weights"])
 
 # SIGMA = 0.71e-6
 # sigmas = np.geomspace(SIGMA, 0.001*SIGMA, 10)
-sigmas = np.geomspace(50 / 255, 1 / 255, 10)
+sigmas = np.geomspace(0.7, 0.002, 10)
 
 N_SAMPLES = 10
 
@@ -42,33 +42,35 @@ def denoiser_to_score(denoiser, x_noisy, sigma):
 
 true_images = torch.from_numpy(data["true image"][:N_SAMPLES]).unsqueeze(1).to(device)
 true_images = true_images / true_images.amax(dim=(1, 2, 3)).view(-1, 1, 1, 1)
-samples0 = true_images * 1 + torch.randn_like(true_images) * 0.2
+samples0 = true_images * 0 + torch.randn_like(true_images) * 1
 
 # samples = torch.rand(N_SAMPLES, 1, 128, 128).to(device)
 # samples = samples*SIGMA
 
 
-T = 1000
+T = 100
 epsilon = 1e-6
 sigma_L = sigmas[-1]
-for ns, sigma in enumerate(sigmas):
-    # print(f"Sampling step {ns + 1}/{len(sigmas)} with sigma={sigma:.2e}")
+all_steps = []
+all_steps.append(samples0.clone())
+
+samples = samples0.clone()
+
+for ns, sigma in enumerate(sigmas, start=1):
     alpha = epsilon * (sigma**2) / (sigma_L**2)
+
     for t in range(T):
-        if ns == 0 and t == 0:
-            samples = samples0.clone()
         score = denoiser_to_score(denoiser, samples, sigma)
-        # print(f" Score: {torch.norm(score):.2e}")
         z = torch.randn_like(samples)
         samples = samples + 0.5 * alpha * score + np.sqrt(alpha) * z
 
+    # store the sample after this step
+    all_steps.append(samples.clone())
 
-plot(
-    [
-        true_images.detach().cpu().numpy().squeeze(),
-        samples0.detach().cpu().numpy().squeeze(),
-        samples.detach().cpu().numpy().squeeze(),
-    ],
-    cbar=True,
-    caption=["True", "Step 0", "Final Samples"],
-)
+# convert to numpy images
+imgs = [s.detach().cpu().numpy().squeeze() for s in all_steps]
+
+# captions: Step 0, Step 1, ..., Step 10
+caps = [f"Step {i}" for i in range(len(imgs))]
+
+plot(imgs, cbar=True, caption=caps, max_imgs=11)

@@ -298,8 +298,8 @@ if __name__ == "__main__":
     study = optuna.create_study(
         study_name=study_name,
         direction="maximize",
-        # storage=f"sqlite:///{optuna_trials_dir}/{study_name}.db",
-        # load_if_exists=True,
+        storage=f"sqlite:///{optuna_trials_dir}/{study_name}.db",
+        load_if_exists=True,
     )
 
     start = time.time()

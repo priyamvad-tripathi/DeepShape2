@@ -26,7 +26,8 @@ from deepshape2.utils import (
 )
 from deepshape2.visualization import plot
 
-SCALE_FAC = 5e7
+cfg = load_config()
+SCALE_FAC = cfg["SCALE_FACTOR"]
 
 
 # %%
@@ -125,7 +126,7 @@ def evaluate_best_params(
     )
 
     # --- Progress bar setup ---
-    pbar = get_progress_bar(True, total=len(val_loader), **get_tqdm())
+    pbar = get_progress_bar(cfg["TQDM"], total=len(val_loader), **get_tqdm())
 
     with torch.inference_mode(), pbar:
         for im, iso, bl in val_loader:
@@ -182,7 +183,7 @@ def evaluate_best_params(
     }
 
     # --- Visualization ---
-    if n > 0:
+    if (n > 0) and cfg["TQDM"]:
         np.random.seed(40)
         inds = np.random.choice(len(isolated_stamps), size=n, replace=False)
 
@@ -229,7 +230,6 @@ if __name__ == "__main__":
     N_TRIALS = args.n_trials
 
     # --- Load Config and Data
-    cfg = load_config()
     DATA_DIR = cfg["DATA_DIR"]
     facet_data = load_h5(DATA_DIR + "facets.h5")
     data = load_h5(DATA_DIR + "wide_set.h5")

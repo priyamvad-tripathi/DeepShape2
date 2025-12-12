@@ -284,6 +284,8 @@ if __name__ == "__main__":
     # Limit to at most 10000 samples
     max_samples = SIZE
     num_samples = min(len(mask), max_samples)
+    if num_samples == 0:
+        num_samples = len(mask)
 
     # Randomly sample indices without replacement
     rand_indices = np.random.choice(mask, size=num_samples, replace=False)

@@ -46,8 +46,8 @@ def parse_args():
         "-b",
         "--batch-size",
         type=int,
-        default=640,
-        help="Batch size (default: 640)",
+        default=128,
+        help="Batch size (default: 128)",
     )
 
     parser.add_argument(
@@ -56,6 +56,13 @@ def parse_args():
         type=int,
         default=200,
         help="Number of Optuna trials (default: 200)",
+    )
+
+    parser.add_argument(
+        "-s",
+        "--size",
+        type=int,
+        default=1000,
     )
 
     return parser.parse_args()
@@ -67,7 +74,7 @@ def parse_args():
 def objective(trial, device, val_loader_subset, deblender):
     """Optuna objective: tune f1, f2, falpha."""
     f1 = trial.suggest_float("f1", 0, 0.5)
-    f2 = trial.suggest_float("f2", 0.8, 4)
+    f2 = trial.suggest_float("f2", 1, 10)
     falpha = trial.suggest_float("falpha", 0, 4)
 
     model = create_model(device=device, f1=f1, f2=f2, falpha=falpha)
@@ -228,6 +235,11 @@ if __name__ == "__main__":
     BATCH_SIZE = args.batch_size
     MIN_FLUX = args.flux
     N_TRIALS = args.n_trials
+    SIZE = args.size
+
+    # MIN_FLUX = 50
+    # BATCH_SIZE = 128
+    # SIZE = 1000
 
     # --- Load Config and Data
     DATA_DIR = cfg["DATA_DIR"]
@@ -269,8 +281,8 @@ if __name__ == "__main__":
     # mask2 = np.where(facet_data["deep/peak"][:] > 0.71e-06 / 3)[0]
     # mask = np.intersect1d(mask1, mask2)
 
-    # Limit to at most 1000 samples
-    max_samples = 1000
+    # Limit to at most 10000 samples
+    max_samples = SIZE
     num_samples = min(len(mask), max_samples)
 
     # Randomly sample indices without replacement

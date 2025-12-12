@@ -188,7 +188,7 @@ def chi2_dirty(dirty, decon, psf, sigma=0.71e-6):
 
 # %%
 def correlations(
-    param_dict, metrics_list, metrics_names=["PSNR", "SSIM"], rf=True, lr=True
+    param_dict, metrics_list, metrics_names=["PSNR", "SSIM"], rf=True, lr=False
 ):
     param_names = list(param_dict.keys())
 

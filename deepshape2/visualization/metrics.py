@@ -9,7 +9,7 @@ from deepshape2.visualization.base import SMALL_SIZE, savefig, set_style
 
 set_style()
 
-__all__ = ["probability_distribution_metric", "binned_boxplot"]
+__all__ = ["probability_distribution_metric", "binned_boxplot", "metric_dependence"]
 
 
 colors = sns.color_palette("tab10", n_colors=3)
@@ -19,7 +19,7 @@ fill_alpha = 0.25  # transparency for both KDE and boxplots
 # %%
 def probability_distribution_metric(
     metric_list,
-    metric_name="PSNR",
+    metric_name="PSNR [dB]",
     model_names=["VAE-MHA", "VAE-CNN", "CAT"],
     fname=None,
     show_median=True,
@@ -103,7 +103,7 @@ def binned_boxplot(
     stat_values,
     metric_matrix,
     model_names=["VAE-MHA", "VAE-CNN", "CAT"],
-    metric_names=(r"$\Delta \epsilon \,[\times 100]$", "PSNR"),
+    metric_names=(r"$\Delta \epsilon \,[\times 100]$", "PSNR [dB]"),
     stat_name=r"Flux $[\mu\mathrm{Jy}]$",
     bin_edges=None,
     fname=None,
@@ -263,6 +263,140 @@ def binned_boxplot(
         ax_kde.set_xlim(left=10, right=200)
         ax_kde.set_xticks(bin_edges)
         ax_kde.set_xticklabels([f"{int(e)}" for e in bin_edges])
+
+    # Save figure
+    savefig(fname)
+
+
+# %%
+def metric_dependence(
+    metric_list,
+    prop_list,
+    bin_edges_list,
+    metric_names=["PSNR [dB]", r"$\Delta \epsilon$"],
+    prop_names=[r"Peak flux $[\mu\mathrm{Jy}]$", r"Size [arcsec]"],
+    colors=("#DC143C", "#008080"),
+    markers=("o", "s"),
+    fname=None,
+    metric_lims_list=None,
+):
+    """
+    Plot metric dependence for two metrics using manually defined bins.
+
+    Parameters
+    ----------
+    metric_list : list of array-like
+        Two metric arrays
+    prop_list : list of array-like
+        Two input properties
+    bin_edges_list : list of array-like
+        Explicit bin edges for each property
+    metric_names : list of str
+        Names of the metrics for each row
+    prop_names : list of str
+        Names of the properties
+    colors : tuple
+        Colors for each metric row
+    markers : tuple
+        Markers for each metric row
+    fname : str or None
+        Output filename
+    metric_lims_list : list of tuple or None
+        Optional y limits per metric
+    """
+
+    def binned_quantiles_manual(x, y, bins):
+        centers = 0.5 * (bins[:-1] + bins[1:])
+        q25 = np.full(len(centers), np.nan)
+        q50 = np.full(len(centers), np.nan)
+        q75 = np.full(len(centers), np.nan)
+
+        for i in range(len(centers)):
+            if i < len(centers) - 1:
+                mask = (x >= bins[i]) & (x < bins[i + 1])
+            else:
+                mask = (x >= bins[i]) & (x <= bins[i + 1])
+
+            if np.any(mask):
+                q25[i], q50[i], q75[i] = np.percentile(y[mask], [25, 50, 75])
+
+        return centers, q25, q50, q75
+
+    n_metrics = len(metric_list)
+
+    if metric_lims_list is None:
+        metric_lims_list = [(None, None)] * n_metrics
+
+    fig = plt.figure(figsize=(12, 8))
+    gs = fig.add_gridspec(
+        n_metrics, 3, width_ratios=[3, 3, 1.5], wspace=0.03, hspace=0.05
+    )
+
+    axes = []
+
+    for i, metric in enumerate(metric_list):
+        color = colors[i]
+        marker = markers[i]
+
+        stats = [
+            binned_quantiles_manual(prop, metric, bins)
+            for prop, bins in zip(prop_list, bin_edges_list)
+        ]
+
+        ax1 = fig.add_subplot(gs[i, 0])
+        ax2 = fig.add_subplot(gs[i, 1], sharey=ax1)
+        ax3 = fig.add_subplot(gs[i, 2], sharey=ax1)
+
+        # Share x axes vertically
+        if i > 0:
+            ax1.sharex(axes[0][0])
+            ax2.sharex(axes[0][1])
+
+        # First property
+        c, q25, q50, q75 = stats[0]
+        ax1.plot(c, q50, color=color, marker=marker)
+        ax1.fill_between(c, q25, q75, color=color, alpha=0.3)
+        ax1.set_ylabel(metric_names[i])
+        ax1.set_ylim(*metric_lims_list[i])
+
+        # Second property
+        c, q25, q50, q75 = stats[1]
+        ax2.plot(c, q50, color=color, marker=marker)
+        ax2.fill_between(c, q25, q75, color=color, alpha=0.3)
+        plt.setp(ax2.get_yticklabels(), visible=False)
+
+        # KDE panel
+        kde = gaussian_kde(metric)
+        y_grid = np.linspace(metric.min(), metric.max(), 300)
+        kde_vals = kde(y_grid)
+
+        metric_med = np.median(metric)
+        q25, q75 = np.percentile(metric, [25, 75])
+
+        (line_kde,) = ax3.plot(kde_vals, y_grid, color=color)
+        ax3.axhline(metric_med, color=color, linestyle="--")
+        ax3.set_xlim(left=0)
+        plt.setp(ax3.get_yticklabels(), visible=False)
+
+        # Add median/IQR label at the top of KDE
+        label_text = f"{metric_names[i]}=${metric_med:.2f} ^{{+{q75 - metric_med:.2f}}}_{{-{metric_med - q25:.2f}}}$"
+        ax3.text(
+            0.98,
+            0.95,
+            label_text,
+            ha="right",
+            va="top",
+            transform=ax3.transAxes,
+            fontsize=SMALL_SIZE,
+        )
+
+        # X labels only on bottom row
+        if i == n_metrics - 1:
+            ax1.set_xlabel(prop_names[0])
+            ax2.set_xlabel(prop_names[1])
+            ax3.set_xlabel("Probability")
+
+        axes.append((ax1, ax2, ax3))
 
     # Save figure
     savefig(fname)

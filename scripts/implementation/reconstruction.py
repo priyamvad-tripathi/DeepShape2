@@ -1,6 +1,4 @@
 # %% Imports
-import os
-
 import numpy as np
 import pandas as pd
 import torch
@@ -17,17 +15,17 @@ from deepshape2.utils import (
     psnr_batch,
     set_seed,
     shape_galsim,
-    ssim_batch,
 )
-from deepshape2.visualization import plot
+from deepshape2.visualization import metric_dependence, plot
 
 # %% Constants / Configuration
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 RESULTS_DIR = cfg["RESULTS_DIR"]
+
 # %% Load Data
-facet_data = load_h5(os.path.join(DATA_DIR, "facets.h5"))
-data = load_h5(os.path.join(DATA_DIR, "deep_set.h5"))
+facet_data = load_h5(DATA_DIR + "facets.h5")
+data = load_h5(DATA_DIR + "deep_set.h5")
 
 # Metadata for patch_000
 patch_df = pd.DataFrame.from_records(data["patch_000"]["patch_df"][()])
@@ -42,84 +40,94 @@ device = get_freest_gpu(set_device=True)
 set_seed()
 
 # Load pre-trained deblender
-ckpt_path = os.path.join(cfg["MODEL_DIR"], "vae_mha.pt")
+ckpt_path = cfg["MODEL_DIR"] + "vae_mha.pt"
 deblender = VAE().to(device)
 deblender.load_state_dict(torch.load(ckpt_path, map_location=device)["best_weights"])
 deblender.eval()
 
 # Load visibility data
-vis = create_visibility_from_ms(os.path.join(DATA_DIR, "MS/vis_deep_set_patch_000.ms"))[
-    0
-]
+vis = create_visibility_from_ms(DATA_DIR + "MS/vis_deep_set_patch_000.ms")[0]
 
 # %% Select Sources
-mask = flux > 25e-6  # Select bright enough sources
+
 
 isolated_stamps = data["patch_000/isolated_stamps"][:]
 blended_stamps = data["patch_000/blended_stamps"][:]
 peak = isolated_stamps.max(axis=(1, 2))
 
 
-# Random subset of sources to visualize
-np.random.seed(42)
-inds = np.random.choice(np.where(mask)[0], size=5, replace=False)
+# mask = flux > 50e-6
+# mask2 = np.where(peak > 0.71e-06 / 3)[0]
+# mask = np.intersect1d(mask1, mask2)
 
 # %% Reconstruction and Evaluation
-GRID_SIZE = 256
-dirty = facet_data[f"deep/facets_{GRID_SIZE}/dirty"][:][inds]
-psf = facet_data[f"deep/facets_{GRID_SIZE}/psf"][:][inds]
-blend = blended_stamps[inds]
-iso = isolated_stamps[inds]
+dirty = facet_data["deep/facets_128/dirty"]
+psf = facet_data["deep/facets_128/psf"]
+blend = extract_image(blended_stamps)
+iso = extract_image(isolated_stamps)
 
 
-result = reconstruct_facets(
-    dirty, psf, device, num_workers=4, deblender=deblender, do_chi2=True
-)
+result = reconstruct_facets(dirty, psf, device, num_workers=4, deblender=deblender)
 recon = result["recon"].copy()
 decon = result["decon"].copy()
-chi2 = result["chi2"].copy()
 
-residuals = [
-    residual_facet_image(vis, dec, galaxy_locations[inds[i]])
-    for i, dec in enumerate(decon)
-]
+blendedness_vals = blendedness(iso, blend)
 
+# %% Metrics Calculation
 # Metrics
-psnr_vals = psnr_batch(extract_image(iso), extract_image(recon))
-blendedness_vals = blendedness(extract_image(iso), extract_image(blend))
-shape_true = shape_galsim(extract_image(iso))[0]
-shape_recon = shape_galsim(extract_image(recon))[0]
+psnr_vals = psnr_batch(iso, recon)
+blendedness_vals = blendedness(iso, blend)
+shape_true = shape_galsim(iso)[0]
+shape_recon = shape_galsim(recon)[0]
 shape_diff = np.linalg.norm(shape_recon - shape_true, axis=1)
 
-psnr_vals_2 = psnr_batch(extract_image(iso, 100), extract_image(decon, 100))
-ssim_vals_2 = ssim_batch(extract_image(iso, 100), extract_image(decon, 100))
-metrics_str_2 = [f"{p:.02f} dB / {s:.03f}" for p, s in zip(psnr_vals_2, ssim_vals_2)]
+
+# --- Report metrics ---
+print(
+    f"Shape: Max {shape_diff.max():.3f} | Min {shape_diff.min():.3f} | Mean {shape_diff.mean():.3f}"
+)
+print(
+    f"PSNR: Max {psnr_vals.max():.3f} dB | Min {psnr_vals.min():.3f} dB | Mean {psnr_vals.mean():.3f} dB"
+)
+
+# %% Plot selected sources
+
+np.random.seed(10)
+mask = flux > 10e-6
+inds = [11816, 12782, 509, 14023]
+# inds = np.random.choice(len(recon[mask]), size=10, replace=False)
+print(inds)
+
+residuals = np.array(
+    [residual_facet_image(vis, decon[mask][i], galaxy_locations[mask][i]) for i in inds]
+)
 
 
-metrics_res = [f"{c:.3f}" for c in chi2]
-
-metrics_str = [f"{p:.02f} dB / {sd:.03f}" for p, sd in zip(psnr_vals, shape_diff)]
-flux_labels = [f"{p * 1e6:.3f} µJy " for p in peak[inds]]
-blendedness_labels = [f"{b:.3f}" for b in blendedness_vals]
+metrics_str = [
+    f"{p:.02f} dB / {sd:.03f}"
+    for p, sd in zip(psnr_vals[mask][inds], shape_diff[mask][inds])
+]
+flux_labels = [f"{p * 1e6:.3f} µJy " for p in flux[mask][inds]]
+blendedness_labels = [f"{b:.3f}" for b in blendedness_vals[mask][inds]]
 
 none_title = [None] * len(inds)
 
 
-# %% Plotting
+# Plotting
 images = [
-    extract_image(iso),
-    extract_image(blend),
-    extract_image(dirty),
-    extract_image(decon),
-    extract_image(residuals),
-    extract_image(recon),
+    iso[mask][inds],
+    blend[mask][inds],
+    dirty[mask][inds],
+    decon[mask][inds],
+    residuals,
+    recon[mask][inds],
 ]
 subtitles = [
     flux_labels,
     blendedness_labels,
     none_title,
-    metrics_str_2,
-    metrics_res,
+    none_title,
+    none_title,
     metrics_str,
 ]
 plot(
@@ -134,6 +142,22 @@ plot(
     ],
     cbar=True,
     subtitles=subtitles,
-    # same_scale=[0, 1],
-    # scale_row=0,
+    same_scale=[0, 1, 3, 5],
+    scale_row=0,
+    fname=RESULTS_DIR + "reconstruction/stamps.pdf",
+)
+# %%
+
+peak_edges = np.linspace(0, 1.8, 7)
+size_edges = np.linspace(0, 5, 7)
+
+size = (
+    patch_df["size"].values[mask_flux] * 1.6783469900166605
+)  # Connvert from scale length to half-light radius
+metric_dependence(
+    [psnr_vals, shape_diff],
+    [peak * 1e6, size],
+    bin_edges_list=[peak_edges, size_edges],
+    metric_lims_list=[(10, 60), (0, 0.6)],
+    fname=RESULTS_DIR + "reconstruction/metric_dependence.pdf",
 )

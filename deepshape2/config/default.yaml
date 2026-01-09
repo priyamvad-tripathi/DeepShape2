@@ -14,13 +14,21 @@ DEC0 : -30.0
 NPIX_SKY: 25200   # Number of pixels along one axis of the sky model
 FFTBIGSIZE: 81488 # GalSim FFTBIG parameter
 
-
 # Scale factor for image deblending
 SCALE_FACTOR: 5e7
 
 # VAE parameters
 VAE_beta: 1e-4 # KL Divergence weight for VAE
 VAE_lr_init: 1e-4 # Initial learning rate for VAE
+
+
+# HQS_PnP Hyperparameters
+hqs_hyperparams:
+  niter: 30
+  SIGMA: 0.71e-06
+  f1: 0.2076320305146005
+  f2: 8.855988804161978
+  falpha: 5.052044590041307
 
 # TQDM parameters
 tqdm:

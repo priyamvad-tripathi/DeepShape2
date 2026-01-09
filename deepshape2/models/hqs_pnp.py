@@ -79,15 +79,8 @@ class HQS_PnP(nn.Module):
 
 # %%
 
-# Default hyperparameters
-DEF_niter = 30
-DEF_SIGMA = 0.71e-6
-DEF_f1 = 0.1414
-DEF_f2 = 1.9979
-DEF_falpha = 3.9949
 
-
-def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine_tuned.pt", **hqs_params):
+def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine_tuned.pt", **params):
     """
     Creates HQS_PnP model with DRUNet denoiser.
 
@@ -104,14 +97,21 @@ def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine_tuned.pt", **hqs_p
         ckpt = torch.load(path, map_location=device, weights_only=False)
         denoiser.load_state_dict(ckpt["best_weights"])
 
-    niter = hqs_params.get("niter", DEF_niter)
-    f1 = hqs_params.get("f1", DEF_f1)
-    f2 = hqs_params.get("f2", DEF_f2)
-    falpha = hqs_params.get("falpha", DEF_falpha)
-    SIGMA = hqs_params.get("SIGMA", DEF_SIGMA)
+    # ! Load hyperparameters from config file if not provided by user
+    default = cfg["hqs_hyperparams"]
+    hyperparams = {**default, **params}
+
+    unknown = hyperparams.keys() - default.keys()
+    if unknown:
+        raise ValueError(f"Unknown hyperparameters: {unknown}")
 
     model = HQS_PnP(
-        niter=niter, f1=f1, f2=f2, falpha=falpha, denoiser=denoiser, SIGMA=SIGMA
+        niter=hyperparams["niter"],
+        f1=hyperparams["f1"],
+        f2=hyperparams["f2"],
+        falpha=hyperparams["falpha"],
+        denoiser=denoiser,
+        SIGMA=hyperparams["SIGMA"],
     ).to(device)
 
     model.eval()

@@ -60,7 +60,7 @@ train_loader = DataLoader(
     num_workers=4,
     pin_memory=True,
     drop_last=True,
-    prefetch_factor=4,
+    prefetch_factor=2,
     persistent_workers=True,
 )
 
@@ -71,7 +71,7 @@ val_loader = DataLoader(
     num_workers=4,
     pin_memory=True,
     drop_last=True,
-    prefetch_factor=4,
+    prefetch_factor=2,
     persistent_workers=True,
 )
 

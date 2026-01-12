@@ -3,4 +3,5 @@
 
 from .base import *
 from .metrics import *
+from .shape_plots import *
 from .table import *

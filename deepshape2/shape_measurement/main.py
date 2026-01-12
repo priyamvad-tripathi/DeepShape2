@@ -13,6 +13,7 @@ from deepshape2.utils import (
     load_ckp,
     load_config,
     save_ckp,
+    set_seed,
     time_string,
 )
 
@@ -20,7 +21,7 @@ from deepshape2.utils import (
 cfg = load_config()
 TQDM_FLAG = cfg["TQDM"]
 tqdm_kwargs = get_tqdm()
-
+set_seed()
 # %%
 
 

@@ -66,7 +66,7 @@ model = model.to(device)
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
-n_epochs = 601
+n_epochs = 301
 
 scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-06}
 

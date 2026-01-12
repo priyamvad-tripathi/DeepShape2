@@ -1,19 +1,14 @@
 # %%
-import random
-
-import numpy as np
 import torch
 from escnn import gspaces, nn
 
-# %% Define seeds
-torch.backends.cudnn.deterministic = True
-torch.backends.cudnn.benchmark = True
+from deepshape2.utils import load_config, set_seed
 
-torch.manual_seed(2024)
-np.random.seed(2024)
-random.seed(2024)
+set_seed()
+cfg = load_config()
 
-# %%
+__all__ = ["shapenet", "shapenet_full"]
+# %% Equivariant Block for feature extraction from images
 
 
 class eq_block(torch.nn.Module):
@@ -85,7 +80,7 @@ class eq_block(torch.nn.Module):
         return x
 
 
-# Full Model
+# %% Simple Model for true images: no PSF encoding
 class shapenet(torch.nn.Module):
     def __init__(self, eq_block=eq_block()):
         super().__init__()
@@ -112,17 +107,15 @@ class shapenet(torch.nn.Module):
         return out
 
 
-# %%
-autoencoder = torch.jit.load("/scratch/tripathi/Model_Weights/autoencoder_jit.pt")
-
-
-# Full Model
+# %% Full Model with PSF encoding
 class shapenet_full(torch.nn.Module):
-    def __init__(self, eq_model=eq_block(), encoder=autoencoder):
+    def __init__(
+        self, eq_block=eq_block(), encoder_path=cfg["MODEL_DIR"] + "autoencoder_jit.pt"
+    ):
         super().__init__()
 
-        self.eq = eq_model
-        self.encode = autoencoder.encoder
+        self.eq = eq_block
+        self.encode = torch.jit.load(encoder_path)
 
         c1 = 32 * 12 * 12
         c2 = 1152

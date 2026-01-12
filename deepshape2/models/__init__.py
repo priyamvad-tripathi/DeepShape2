@@ -4,4 +4,5 @@
 from .autoencoder import *
 from .cat_deblender import *
 from .hqs_pnp import *
+from .shape_network import *
 from .vae import *

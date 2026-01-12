@@ -1,14 +1,13 @@
 # %% Import Libraries
 import bisect
 import os
-from typing import List, Optional, Tuple, Union
 
 import h5py
 import numpy as np
 import torch
 import torchvision.transforms as transforms
 import torchvision.transforms.v2 as v2
-from torch.utils.data import DataLoader, Dataset, Sampler, get_worker_info
+from torch.utils.data import Dataset, Sampler, get_worker_info
 
 from deepshape2.utils import load_config, set_seed
 
@@ -390,153 +389,148 @@ class DenoiseDataset(Dataset):
 
 
 # %% Shape Measurement Loader
-class ImageDataset(Dataset):
-    """
-    PyTorch Dataset for loading images and ellipticities from an HDF5 file.
 
-    Parameters
-    ----------
-    path : str
-        Path to the HDF5 file.
-    x_key : list of str
-        Keys for the input images (e.g., ['dirty_image', 'PSF']).
-    y_key : list of str
-        Key(s) for the target (e.g., ellipticity).
-    peak : float, optional
-        If provided, applies a cutoff using the 'Peak' dataset.
-    transform : callable, optional
-        Transform function applied to input images.
-    scale : bool, default=True
-        Whether to normalize input images to [0, 1].
-    """
 
-    def __init__(
-        self,
-        path: str,
-        x_key: List[str],
-        y_key: Optional[List[str]] = None,
-        transform: Optional[callable] = None,
-        scale: bool = True,
-    ):
+class ShapeDataset(Dataset):
+    def __init__(self, path: str, keys, groups=None):
+        """
+        Optimized HDF5 dataset returning (image, label) pairs.
+
+        Args:
+            path (str): Path to HDF5 file
+            keys (list[str]): Keys inside each group to load as image channels
+            groups (list[str], optional): Restrict to these groups
+            crop (int): Center crop size if image larger
+        """
         if not os.path.exists(path):
             raise FileNotFoundError(f"HDF5 file not found: {path}")
+        if isinstance(keys, str):
+            keys = [keys]
+        self.path = path
+        self.keys = keys
 
-        self.hf = h5py.File(path, "r")
-        self.x_key = x_key
-        self.y_key = y_key or []
-        self.transform = transform
-        self.scale = scale
+        self.groups = []
+        self.group_sizes = []
+        self.valid_indices = []
+        self.labels_per_group = []
 
-    def __len__(self) -> int:
-        return len(self.hf[self.x_key[0]])
+        # ---------------- Preload group metadata and labels ---------------- #
+        with h5py.File(self.path, "r") as hf:
+            available = list(hf.keys())
+            self.groups = groups if groups is not None else available
 
+            for g in self.groups:
+                group = hf[g]
+                total = len(group[self.keys[0]])
+                self.valid_indices.append(np.arange(total))
+                self.group_sizes.append(total)
+
+                # Preload labels once per group
+                patch_df = group["patch_df"][()]
+                mask = patch_df["flux_mask"]
+                e1 = patch_df["e1"][mask]
+                e2 = patch_df["e2"][mask]
+                self.labels_per_group.append(np.stack([e1, e2], axis=1))  # shape (N,2)
+
+        # Cumulative sizes for global indexing
+        self.cumulative_sizes = np.cumsum(self.group_sizes).tolist()
+        self._hf = None  # HDF5 file handle
+
+    # ---------------- HDF5 handle ---------------- #
+    def _get_h5(self):
+        worker_info = get_worker_info()
+        if worker_info is None:
+            if self._hf is None:
+                self._hf = h5py.File(self.path, "r")
+            return self._hf
+
+        wid = worker_info.id
+        if not hasattr(self, "_worker_files"):
+            self._worker_files = {}
+        if wid not in self._worker_files:
+            self._worker_files[wid] = h5py.File(self.path, "r")
+        return self._worker_files[wid]
+
+    # ---------------- Length ---------------- #
+    def __len__(self):
+        return self.cumulative_sizes[-1]
+
+    # ---------------- Locate index ---------------- #
+    def _locate(self, global_idx):
+        if global_idx < 0 or global_idx >= self.cumulative_sizes[-1]:
+            raise IndexError(f"Index {global_idx} out of range")
+        group_idx = bisect.bisect_right(self.cumulative_sizes, global_idx)
+        prev = 0 if group_idx == 0 else self.cumulative_sizes[group_idx - 1]
+        offset = global_idx - prev
+        local_idx = self.valid_indices[group_idx][offset]
+        return group_idx, local_idx
+
+    # ---------------- Normalize ---------------- #
     @staticmethod
     def _normalize(img: np.ndarray) -> np.ndarray:
-        """Normalize image to [0, 1] range."""
+        """Normalize image to [0,1] range."""
         img_min = img.min()
-        img_range = np.ptp(img)
+        img_range = img.max() - img_min
         return (img - img_min) / img_range if img_range > 0 else img
 
-    def __getitem__(
-        self, idx: int
-    ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-        # Load all input channels and normalize if needed
-        x = [self.hf[k][idx] for k in self.x_key]
-        if self.scale:
-            x = [self._normalize(im) for im in x]
+    # ---------------- Get item ---------------- #
+    def __getitem__(self, idx):
+        hf = self._get_h5()
 
-        x = np.stack(x, axis=0)  # shape: (C, H, W)
-        x = torch.from_numpy(x).float()
+        # ---------------- Handle slices / lists / tensors ---------------- #
+        if isinstance(idx, slice):
+            start, stop, step = idx.indices(len(self))
+            return [self[i] for i in range(start, stop, step)]
+        if isinstance(idx, (list, tuple, np.ndarray)):
+            return [self[int(i)] for i in idx]
+        if torch.is_tensor(idx):
+            idx = idx.item() if idx.dim() == 0 else idx.tolist()
+            return (
+                [self[int(i)] for i in idx] if isinstance(idx, list) else self[int(idx)]
+            )
 
-        if self.transform is not None:
-            x = self.transform(x)
+        # ---------------- Single index ---------------- #
+        group_idx, local_idx = self._locate(idx)
+        group_name = self.groups[group_idx]
+        group = hf[group_name]
 
-        if self.y_key:
-            y = torch.from_numpy(self.hf[self.y_key[0]][idx]).float()
-            return x, y
-        return x
+        # ---------------- Load images from keys ---------------- #
+        imgs = []
+        for k in self.keys:
+            img = np.array(group[k][local_idx], dtype=np.float32)
+            img = self._normalize(img)
+            imgs.append(img)
 
-    def close(self):
-        """Manually close the HDF5 file."""
-        if self.hf:
-            self.hf.close()
+        # Stack along channel dimension if multiple keys
+        img = np.stack(imgs, axis=0)  # shape (C,H,W)
 
+        # Convert to tensor
+        img = torch.from_numpy(img)
 
-def dataloader(
-    path: str,
-    x_key: List[str],
-    y_key: Optional[List[str]],
-    split: Union[List[float], int],
-    batch_size: Union[List[int], int],
-    **kwargs,
-):
-    """
-    Create PyTorch DataLoader(s) from an HDF5 dataset.
+        # ---------------- Center crop if needed ---------------- #
+        if img.shape[-2] > 128 or img.shape[-1] > 128:
+            img = crop_128(img)
 
-    Parameters
-    ----------
-    path : str
-        Path to HDF5 dataset.
-    x_key : list of str
-        Keys for the input images.
-    y_key : list of str
-        Keys for the target values.
-    split : list of floats or int
-        - If list: [train_split, val_split] fractions (should sum to 1).
-        - If int: dataset size (no split).
-    batch_size : list of int or int
-        Batch size(s) for training and validation sets.
-    **kwargs : dict
-        Additional arguments for `ImageDataset`.
+        # ---------------- Load labels ---------------- #
+        y = torch.from_numpy(
+            self.labels_per_group[group_idx][local_idx]
+        ).float()  # shape (2,)
 
-    Returns
-    -------
-    DataLoader or (DataLoader, DataLoader)
-        Returns one or two DataLoaders depending on split type.
-    """
+        return img, y
 
-    dataset = ImageDataset(path=path, x_key=x_key, y_key=y_key, **kwargs)
-
-    if isinstance(split, (list, tuple)):
-        if not np.isclose(sum(split), 1.0):
-            raise ValueError("Split ratios must sum to 1.")
-        if not isinstance(batch_size, (list, tuple)) or len(batch_size) != len(split):
-            raise ValueError("`batch_size` must match number of splits.")
-
-        n_total = len(dataset)
-        lengths = [int(n_total * s) for s in split]
-        # Ensure rounding errors don't lose samples
-        lengths[-1] = n_total - sum(lengths[:-1])
-
-        train_ds, val_ds = torch.utils.data.random_split(dataset, lengths)
-        train_loader = DataLoader(
-            train_ds,
-            batch_size=batch_size[0],
-            shuffle=True,
-            num_workers=4,
-            pin_memory=True,
-            drop_last=True,
-        )
-        val_loader = DataLoader(
-            val_ds,
-            batch_size=batch_size[1],
-            shuffle=False,
-            num_workers=4,
-            pin_memory=True,
-            drop_last=True,
-        )
-        return train_loader, val_loader
-
-    else:
-        loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=4,
-            pin_memory=True,
-            drop_last=True,
-        )
-        return loader
+    # ---------------- Cleanup ---------------- #
+    def __del__(self):
+        try:
+            if hasattr(self, "_hf") and self._hf is not None:
+                self._hf.close()
+        except Exception:
+            pass
+        if hasattr(self, "_worker_files"):
+            for f in self._worker_files.values():
+                try:
+                    f.close()
+                except Exception:
+                    pass
 
 
 # %%

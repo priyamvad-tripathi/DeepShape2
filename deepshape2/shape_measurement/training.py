@@ -110,13 +110,13 @@ val_loss = checkpoint["val_loss_list"]
 train_loss = checkpoint["train_loss_list"]
 
 
-plot_losses(train_loss, val_loss, skip=0)
+plot_losses([train_loss, val_loss], skip=0)
 
 
 ypred, ytest, _ = predict(
     model,
     weights=best_weights,
-    dataloader=val_loader,
+    data_loader=val_loader,
     device=device,
 )
 
@@ -130,4 +130,4 @@ print(
 if not FINAL:
     model.eval()
     model.load_state_dict(best_weights)
-    torch.save(model.eq_block.state_dict(), MODEL_DIR + "eq_block.pt")
+    torch.save(model.eq.state_dict(), MODEL_DIR + "eq_block.pt")

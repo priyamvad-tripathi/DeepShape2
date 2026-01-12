@@ -60,6 +60,8 @@ train_loader = DataLoader(
     num_workers=4,
     pin_memory=True,
     drop_last=True,
+    prefetch_factor=4,
+    persistent_workers=True,
 )
 
 val_loader = DataLoader(
@@ -69,6 +71,8 @@ val_loader = DataLoader(
     num_workers=4,
     pin_memory=True,
     drop_last=True,
+    prefetch_factor=4,
+    persistent_workers=True,
 )
 
 #  Load model to device

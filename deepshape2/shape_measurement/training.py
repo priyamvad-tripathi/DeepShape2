@@ -4,17 +4,29 @@ import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import ShapeDataset
-from deepshape2.models import shapenet
+from deepshape2.models import shapenet, shapenet_full
 from deepshape2.shape_measurement.main import predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
+
+FINAL = False
 
 # %% Load Config and Set Parameters
 cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
+MODEL_DIR = cfg["MODEL_DIR"]
+
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = cfg["MODEL_DIR"] + "shape_network_true.pt"
+
+if FINAL:
+    loc_weights = MODEL_DIR + "shape_network_full.pt"
+    keys = ["recon", "psf"]
+    model = shapenet_full()
+else:
+    loc_weights = MODEL_DIR + "shape_network_true.pt"
+    keys = ["isolated_stamps"]
+    model = shapenet()
 
 # Torch Parameters
 device = get_freest_gpu(set_device=True)
@@ -30,13 +42,13 @@ group_names_train, group_names_val = group_names[:15], group_names[15:]
 # Split into train and validation sets
 train_dataset = ShapeDataset(
     path=loc_data,
-    keys=["isolated_stamps"],
+    keys=keys,
     groups=group_names_train,
 )
 
 val_dataset = ShapeDataset(
     path=loc_data,
-    keys=["isolated_stamps"],
+    keys=keys,
     groups=group_names_val,
 )
 
@@ -59,8 +71,7 @@ val_loader = DataLoader(
     drop_last=True,
 )
 
-#  Load model
-model = shapenet()
+#  Load model to device
 model = model.to(device)
 # print(model(torch.randn(10, 1, 128, 128).to(device)).size())
 
@@ -112,6 +123,7 @@ print(
 )
 
 # %% Save eq weights
-model.eval()
-model.load_state_dict(best_weights)
-torch.save(model.eq_block.state_dict(), cfg["MODEL_DIR"] + "eq_block.pt")
+if not FINAL:
+    model.eval()
+    model.load_state_dict(best_weights)
+    torch.save(model.eq_block.state_dict(), MODEL_DIR + "eq_block.pt")

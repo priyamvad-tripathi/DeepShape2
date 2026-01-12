@@ -40,7 +40,7 @@ def validation_loss(model, val_loader, loss_fn, device):
             val_loss_all.append(val_loss)
 
     # Concatenate all batches and move to CPU once
-    val_loss_all = torch.cat(val_loss_all)
+    val_loss_all = torch.stack(val_loss_all)
     return val_loss_all.mean().item()
 
 

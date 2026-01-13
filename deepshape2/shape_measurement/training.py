@@ -55,7 +55,7 @@ val_dataset = ShapeDataset(
 # Initialize DataLoaders
 train_loader = DataLoader(
     train_dataset,
-    batch_size=32,
+    batch_size=64,
     shuffle=True,
     num_workers=4,
     pin_memory=True,
@@ -66,7 +66,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=32,
+    batch_size=64,
     shuffle=False,
     num_workers=4,
     pin_memory=True,
@@ -113,7 +113,7 @@ train_loss = checkpoint["train_loss_list"]
 plot_losses([train_loss, val_loss], skip=0)
 
 
-ypred, ytest, _ = predict(
+ypred, ytest, images = predict(
     model,
     weights=best_weights,
     data_loader=val_loader,
@@ -121,7 +121,7 @@ ypred, ytest, _ = predict(
 )
 
 # Calculate Bias
-plot_bias(ypred, ytest, power=1e4, ellipticity_cutoff=0.6)
+plot_bias(ypred, ytest, power=1e4, ellipticity_cutoff=0.6, lim=0.1)
 print(
     f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
 )

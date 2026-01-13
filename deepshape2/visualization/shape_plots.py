@@ -18,6 +18,7 @@ def plot_bias(
     bad_index=None,
     bias_line=True,
     ellipticity_cutoff=0.7,
+    lim=0.7,
 ):
     """
     Scatter plot of ellipticity residuals with linear bias lines
@@ -76,7 +77,10 @@ def plot_bias(
         print(f"Component e{i + 1}: slope = {m:.5f}, intercept = {c:.5f}")
 
         # Scatter points
-        ax.scatter(x, y, color=colors[i], s=5, alpha=0.5, label=f"e{i + 1}")
+        label = (
+            rf"$e{i + 1}: m={m * power:.2f}\pm{stderr * power:.2f}, c={c * power:.2f}$"
+        )
+        ax.scatter(x, y, color=colors[i], s=5, alpha=0.5, label=label)
 
         # Bias line
         if bias_line:
@@ -84,15 +88,11 @@ def plot_bias(
             y_line = m * x_line + c
             ax.plot(x_line, y_line, color=colors[i], linestyle="--", linewidth=1)
 
-            # Add slope/intercept to legend
-            label = rf"$e{i + 1}: m={m * power:.2f}\pm{stderr * power:.2f}, c={c * power:.2f}$"
-            ax.plot([], [], color=colors[i], linestyle="--", label=label)
-
     ax.set(
         xlabel=r"$\epsilon^T$",
         ylabel=r"$\hat{\epsilon}-\epsilon^T$",
         xlim=(-1, 1),
-        ylim=(-0.05, 0.05),
+        ylim=(-lim, lim),
     )
     ax.axhline(0, color="black", linestyle="--", linewidth=0.7)
 

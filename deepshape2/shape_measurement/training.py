@@ -83,7 +83,7 @@ model = model.to(device)
 #! Test with different paramters for best results
 n_epochs = 301
 
-scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-06}
+scheduler_params = {"factor": 0.5, "patience": 25, "min_lr": 1e-06}
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3, weight_decay=1e-5

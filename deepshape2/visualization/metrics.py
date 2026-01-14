@@ -270,39 +270,21 @@ def binned_boxplot(
 
 # %%
 def metric_dependence(
-    metric_list,
+    metric_list_list,
     prop_list,
     bin_edges_list,
     metric_names=["PSNR [dB]", r"$\Delta \epsilon$"],
     prop_names=[r"Peak flux $[\mu\mathrm{Jy}]$", r"Size [arcsec]"],
-    colors=("#DC143C", "#008080"),
+    method_names=["Isolated", "Wide field"],
+    colors=("#DC143C", "#1E90FF"),
     markers=("o", "s"),
     fname=None,
     metric_lims_list=None,
 ):
     """
-    Plot metric dependence for two metrics using manually defined bins.
-
-    Parameters
-    ----------
-    metric_list : list of array-like
-        Two metric arrays
-    prop_list : list of array-like
-        Two input properties
-    bin_edges_list : list of array-like
-        Explicit bin edges for each property
-    metric_names : list of str
-        Names of the metrics for each row
-    prop_names : list of str
-        Names of the properties
-    colors : tuple
-        Colors for each metric row
-    markers : tuple
-        Markers for each metric row
-    fname : str or None
-        Output filename
-    metric_lims_list : list of tuple or None
-        Optional y limits per metric
+    Plot metric dependence for multiple metrics and multiple methods.
+    Handles NaNs independently per method.
+    Prints median ± IQR to screen.
     """
 
     def binned_quantiles_manual(x, y, bins):
@@ -317,12 +299,14 @@ def metric_dependence(
             else:
                 mask = (x >= bins[i]) & (x <= bins[i + 1])
 
-            if np.any(mask):
-                q25[i], q50[i], q75[i] = np.percentile(y[mask], [25, 50, 75])
+            values = y[mask]
+            values = values[~np.isnan(values)]
+            if len(values) > 0:
+                q25[i], q50[i], q75[i] = np.percentile(values, [25, 50, 75])
 
         return centers, q25, q50, q75
 
-    n_metrics = len(metric_list)
+    n_metrics = len(metric_list_list)
 
     if metric_lims_list is None:
         metric_lims_list = [(None, None)] * n_metrics
@@ -334,61 +318,71 @@ def metric_dependence(
 
     axes = []
 
-    for i, metric in enumerate(metric_list):
-        color = colors[i]
-        marker = markers[i]
-
-        stats = [
-            binned_quantiles_manual(prop, metric, bins)
-            for prop, bins in zip(prop_list, bin_edges_list)
-        ]
-
+    for i, metric_methods in enumerate(metric_list_list):
         ax1 = fig.add_subplot(gs[i, 0])
         ax2 = fig.add_subplot(gs[i, 1], sharey=ax1)
         ax3 = fig.add_subplot(gs[i, 2], sharey=ax1)
 
-        # Share x axes vertically
         if i > 0:
             ax1.sharex(axes[0][0])
             ax2.sharex(axes[0][1])
 
-        # First property
-        c, q25, q50, q75 = stats[0]
-        ax1.plot(c, q50, color=color, marker=marker)
-        ax1.fill_between(c, q25, q75, color=color, alpha=0.3)
         ax1.set_ylabel(metric_names[i])
         ax1.set_ylim(*metric_lims_list[i])
 
-        # Second property
-        c, q25, q50, q75 = stats[1]
-        ax2.plot(c, q50, color=color, marker=marker)
-        ax2.fill_between(c, q25, q75, color=color, alpha=0.3)
-        plt.setp(ax2.get_yticklabels(), visible=False)
+        for j, metric in enumerate(metric_methods):
+            metric = np.array(metric)
+            color = colors[j % len(colors)]
+            marker = markers[i % len(markers)]
 
-        # KDE panel
-        kde = gaussian_kde(metric)
-        y_grid = np.linspace(metric.min(), metric.max(), 300)
-        kde_vals = kde(y_grid)
+            # Bin stats for first two columns
+            stats = [
+                binned_quantiles_manual(prop, metric, bins)
+                for prop, bins in zip(prop_list, bin_edges_list)
+            ]
 
-        metric_med = np.median(metric)
-        q25, q75 = np.percentile(metric, [25, 75])
+            # First property
+            c, q25, q50, q75 = stats[0]
+            ax1.plot(
+                c,
+                q50,
+                color=color,
+                marker=marker,
+                label=method_names[j] if i == 0 else None,
+            )
+            ax1.fill_between(c, q25, q75, color=color, alpha=0.3)
 
-        (line_kde,) = ax3.plot(kde_vals, y_grid, color=color)
-        ax3.axhline(metric_med, color=color, linestyle="--")
-        ax3.set_xlim(left=0)
-        plt.setp(ax3.get_yticklabels(), visible=False)
+            # Second property
+            c, q25, q50, q75 = stats[1]
+            ax2.plot(c, q50, color=color, marker=marker)
+            ax2.fill_between(c, q25, q75, color=color, alpha=0.3)
+            plt.setp(ax2.get_yticklabels(), visible=False)
 
-        # Add median/IQR label at the top of KDE
-        label_text = f"{metric_names[i]}=${metric_med:.2f} ^{{+{q75 - metric_med:.2f}}}_{{-{metric_med - q25:.2f}}}$"
-        ax3.text(
-            0.98,
-            0.95,
-            label_text,
-            ha="right",
-            va="top",
-            transform=ax3.transAxes,
-            fontsize=SMALL_SIZE,
-        )
+            # Compute and print median ± IQR (ignore NaNs)
+            metric_med = np.nanmedian(metric)
+            q25_val, q75_val = np.nanpercentile(metric, [25, 75])
+            lower = metric_med - q25_val
+            upper = q75_val - metric_med
+            print(
+                f"{metric_names[i]} ({method_names[j]}): median={metric_med:.2f} +{upper:.2f} / -{lower:.2f}"
+            )
+
+            # KDE plot (optional, just for visualization)
+            metric_clean = metric[~np.isnan(metric)]
+            if len(metric_clean) > 1:
+                kde = gaussian_kde(metric_clean)
+                y_grid = np.linspace(metric_clean.min(), metric_clean.max(), 300)
+                kde_vals = kde(y_grid)
+                ax3.plot(kde_vals, y_grid, color=color)
+                ax3.axhline(metric_med, color=color, linestyle="--")
+            elif len(metric_clean) == 1:
+                ax3.plot([0, 1], [metric_clean[0], metric_clean[0]], color=color)
+            ax3.set_xlim(left=0)
+            plt.setp(ax3.get_yticklabels(), visible=False)
+
+        # Legend only on top-left
+        if i == 0:
+            ax1.legend(loc="upper left", fontsize=SMALL_SIZE)
 
         # X labels only on bottom row
         if i == n_metrics - 1:
@@ -398,5 +392,4 @@ def metric_dependence(
 
         axes.append((ax1, ax2, ax3))
 
-    # Save figure
     savefig(fname)

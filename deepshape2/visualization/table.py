@@ -31,6 +31,7 @@ def normalize_images_shape(images, subtitles=None):
 
 
 def get_vmin_vmax(images, same_scale, scale_row=None):
+    """Compute vmin/vmax per column from the provided same_scale rows."""
     cols = images.shape[1]
     vmin = np.ones(cols) * np.inf
     vmax = np.ones(cols) * -np.inf
@@ -38,28 +39,46 @@ def get_vmin_vmax(images, same_scale, scale_row=None):
     for col in range(cols):
         for row in same_scale:
             img = images[scale_row, col] if scale_row is not None else images[row, col]
-            vmin[col] = min(vmin[col], np.min(img))
-            vmax[col] = max(vmax[col], np.max(img))
+            vmin[col] = min(vmin[col], np.nanmin(img))
+            vmax[col] = max(vmax[col], np.nanmax(img))
     return vmin, vmax
 
 
-def plot(images, **kwargs):
-    titles = kwargs.get("titles", None)
-    max_imgs = kwargs.get("max_imgs", 8)
-    cmap = kwargs.get("cmap", "inferno")
-    cbar = kwargs.get("cbar", False)
-    caption = kwargs.get("caption", None)
-    same_scale = kwargs.get("same_scale", 0)
-    fname = kwargs.get("fname", None)
-    text = kwargs.get("text", None)
-    text_row = kwargs.get("text_row", None)
-    scale_row = kwargs.get("scale_row", None)
-    suptitle = kwargs.get("suptitle", None)
-    swap = kwargs.get("swap", False)
-    remove_bg = kwargs.get("remove_bg", False)
-    subtitles = kwargs.get("subtitles", None)
-    size_fac = kwargs.get("size_fac", 1)
+def plot(
+    images,
+    titles=None,
+    max_imgs=8,
+    cmap="inferno",
+    cbar=False,
+    caption=None,
+    same_scale=0,
+    fname=None,
+    text=None,
+    text_row=None,
+    scale_row=None,
+    suptitle=None,
+    swap=False,
+    remove_bg=False,
+    subtitles=None,
+    size_fac=1,
+    scale_ranges=None,  # Optional: list of (vmin,vmax) per column
+    return_scales=False,
+):
+    """
+    Plot images in a grid with optional scaling per column for specific rows only.
 
+    Parameters
+    ----------
+    same_scale : int or list
+        Rows over which to apply same scaling.
+    scale_ranges : list of (vmin, vmax) or None
+        Optional predefined scale per column.
+
+    Returns
+    -------
+    used_scales : list
+        List of (vmin, vmax) used for each column. None if no scaling applied.
+    """
     images, subtitles = normalize_images_shape(images, subtitles)
 
     if swap:
@@ -75,8 +94,13 @@ def plot(images, **kwargs):
     if titles and len(titles) != cols:
         raise ValueError("Title list should match number of columns")
 
-    if not isinstance(same_scale, int):
+    # Compute vmin/vmax per column
+    used_scales = [None] * cols
+    if scale_ranges is not None:
+        used_scales = scale_ranges
+    elif not isinstance(same_scale, int):
         vmin, vmax = get_vmin_vmax(images, same_scale, scale_row)
+        used_scales = [(vmin[c], vmax[c]) for c in range(cols)]
 
     with rc_context(
         rc={
@@ -96,10 +120,20 @@ def plot(images, **kwargs):
         for r in range(rows):
             for c in range(cols):
                 ax = axs[r, c]
+
+                # Apply scaling only to rows in same_scale
+                scale = None
                 if isinstance(same_scale, int) or r not in same_scale:
-                    im = ax.imshow(images[r, c], cmap=cmap)
+                    scale = None
                 else:
-                    im = ax.imshow(images[r, c], cmap=cmap, vmin=vmin[c], vmax=vmax[c])
+                    scale = used_scales[c]
+
+                if scale is not None:
+                    im = ax.imshow(
+                        images[r, c], cmap=cmap, vmin=scale[0], vmax=scale[1]
+                    )
+                else:
+                    im = ax.imshow(images[r, c], cmap=cmap)
 
                 if titles and r == 0:
                     ax.set_title(titles[c], size=MEDIUM_SIZE)
@@ -136,17 +170,12 @@ def plot(images, **kwargs):
             for cap, ax in zip(caption, axs[:, 0]):
                 ax.set_ylabel(cap, fontsize=MEDIUM_SIZE)
 
-        # plt.subplots_adjust(
-        #     hspace=0.02 if cbar else 0.01, wspace=0.25 if cbar else 0.05
-        # )
-
         if suptitle:
             fig.suptitle(suptitle)
 
-        if fname:
-            savefig(fname, remove_bg=remove_bg)
-        else:
-            plt.show()
+        savefig(fname, remove_bg=remove_bg)
+    if return_scales:
+        return used_scales
 
 
 # %%

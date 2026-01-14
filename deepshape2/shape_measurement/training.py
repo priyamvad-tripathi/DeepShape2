@@ -24,7 +24,7 @@ if FINAL:
     keys = ["recon", "psf"]
     model = shapenet_full()
 else:
-    loc_weights = MODEL_DIR + "shape_network_true.pt"
+    loc_weights = MODEL_DIR + "shape_network_true_lr_40.pt"
     keys = ["isolated_stamps"]
     model = shapenet()
 
@@ -83,7 +83,7 @@ model = model.to(device)
 #! Test with different paramters for best results
 n_epochs = 301
 
-scheduler_params = {"factor": 0.5, "patience": 25, "min_lr": 1e-06}
+scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-06}
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3, weight_decay=1e-5
@@ -108,10 +108,10 @@ checkpoint = torch.load(loc_weights, map_location=device, weights_only=False)
 best_weights = checkpoint["best_weights"]
 val_loss = checkpoint["val_loss_list"]
 train_loss = checkpoint["train_loss_list"]
+lr = checkpoint["lr_list"]
 
-
-plot_losses([train_loss, val_loss], skip=0)
-
+plot_losses([train_loss, val_loss], skip=0, logscale=True)
+plot_losses([lr], labels=["Learning Rate"], skip=0, logscale=False)
 
 ypred, ytest, images = predict(
     model,

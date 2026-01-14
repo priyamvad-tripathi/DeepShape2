@@ -102,6 +102,13 @@ def train(
             current_lr = None
             new_lr = False
 
+        # Epoch header
+        if not TQDM_FLAG:
+            line0 = f"Epoch {epoch + 1}/{epochs}"
+            if current_lr is not None:
+                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+            print(line0)
+
         pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
@@ -145,12 +152,7 @@ def train(
             epoch_loss = torch.stack(batch_losses).mean().item()
             train_loss_list.append(epoch_loss)
 
-            if not TQDM_FLAG:
-                line0 = f"Epoch {epoch + 1}/{epochs}"
-                if current_lr is not None:
-                    line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
-                print(line0)
-                line = f"Train Loss: {epoch_loss:.{precision}e} "
+            line = f"Train Loss: {epoch_loss:.{precision}e} "
 
             # --- Validation ---
             if val_loader:
@@ -178,10 +180,7 @@ def train(
                     ),
                 }
                 pbar.set_postfix(pfix)
-
-                if not TQDM_FLAG:
-                    marker = "BEST" if is_best else ""
-                    line += f" | Val Loss: {val_loss:.4e} {marker}"
+                line += f" | Val Loss: {val_loss:.4e}" + (" BEST" if is_best else "")
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}

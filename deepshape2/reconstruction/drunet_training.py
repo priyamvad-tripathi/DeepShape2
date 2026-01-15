@@ -9,7 +9,7 @@ from colorist import Color
 from deepinv.models import DRUNet as DinvDRUNet
 from torch.utils.data import DataLoader
 
-from deepshape2.data.loaders import DenoiseDataset, RandomSubsetSampler
+from deepshape2.data.loaders import CenterCrop, DenoiseDataset, RandomSubsetSampler
 
 # from deepshape2.models.drunet import DRUNet
 from deepshape2.utils import (
@@ -48,13 +48,14 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_blended.pt"
+loc_weights = MODEL_DIR + "drunet_blended2.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
 
 tqdm_kwargs = get_tqdm()
+crop4 = CenterCrop(4)
 
 # %% Denoiser Model Setup and data
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
@@ -130,7 +131,8 @@ def process_batch(clean_batch, device):
         clean = clean.flip(-2)
 
     # Scale images to [0,1]
-    peak_vals = clean.amax(dim=(1, 2, 3), keepdim=True)
+    clean_crop = crop4(clean)
+    peak_vals = clean_crop.amax(dim=(1, 2, 3), keepdim=True)
     clean_scaled = clean / peak_vals
 
     max_noise = 0.6
@@ -406,6 +408,10 @@ def predict_denoiser(
         pretrained=MODEL_DIR + "drunet_deepinv_gray_finetune_26k.pth",
         device=device,
     )
+    ckp_iso = torch.load(
+        MODEL_DIR + "drunet_fine_tuned.pt", map_location=device, weights_only=False
+    )
+    model2.load_state_dict(ckp_iso["best_weights"])
     model2 = model2.eval()
 
     with torch.inference_mode():
@@ -458,7 +464,7 @@ def predict_denoiser(
 
     # ---- Print stats ---- #
     if print_stats:
-        print("Self-trained:")
+        print("TS Blended:")
         print(
             f"PSNR  Mean {psnr_all.mean():.03f} | "
             f"Min {psnr_all.min():.03f} | "
@@ -470,7 +476,7 @@ def predict_denoiser(
             f"Max {ssim_all.max():.03f}"
         )
         print("-" * 30)
-        print("Dinv:")
+        print("TS Iso:")
         print(
             f"PSNR  Mean {psnr_all_2.mean():.03f} | "
             f"Min {psnr_all_2.min():.03f} | "
@@ -512,10 +518,10 @@ def predict_denoiser(
                 out_inds,
                 out_inds_2,
             ],
-            caption=["True", "Noisy", "Self-trained", "DINV"],
+            caption=["True", "Noisy", "TS: Blend", "TS: Iso"],
             cbar=True,
-            # scale_row=0,
-            # same_scale=[0, 1, 2],
+            scale_row=3,
+            same_scale=[0, 2, 3],
             subtitles=[
                 [None] * n,
                 [f"{psn:.02f}" for psn in input_psnr[inds]],

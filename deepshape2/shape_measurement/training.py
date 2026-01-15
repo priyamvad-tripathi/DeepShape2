@@ -13,6 +13,9 @@ FINAL = False
 
 # %% Load Config and Set Parameters
 cfg = load_config()
+TQDM_FLAG = cfg["TQDM"]
+
+print("TQDM enabled:", TQDM_FLAG)
 
 DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
@@ -24,7 +27,7 @@ if FINAL:
     keys = ["recon", "psf"]
     model = shapenet_full()
 else:
-    loc_weights = MODEL_DIR + "shape_network_true_lr_40.pt"
+    loc_weights = MODEL_DIR + "shape_network_true.pt"
     keys = ["isolated_stamps"]
     model = shapenet()
 
@@ -83,7 +86,7 @@ model = model.to(device)
 #! Test with different paramters for best results
 n_epochs = 301
 
-scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-06}
+scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-07}
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3, weight_decay=1e-5
@@ -101,6 +104,7 @@ best_weights, train_loss_list, val_loss_list = train(
     optimizer=optimizer,
     scheduler=scheduler,
     save_freq=10,
+    tqdm_enabled=TQDM_FLAG,
 )
 
 # %%  Calculate bias on validation set
@@ -118,10 +122,11 @@ ypred, ytest, images = predict(
     weights=best_weights,
     data_loader=val_loader,
     device=device,
+    tqdm_enabled=TQDM_FLAG,
 )
 
 # Calculate Bias
-plot_bias(ypred, ytest, power=1e4, ellipticity_cutoff=0.6, lim=0.1)
+plot_bias(ypred, ytest, power=1e4, ellipticity_cutoff=1, lim=0.05)
 print(
     f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
 )

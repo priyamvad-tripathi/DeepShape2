@@ -19,7 +19,6 @@ from deepshape2.utils import (
 
 # %% Load Config and Set Parameters
 cfg = load_config()
-TQDM_FLAG = cfg["TQDM"]
 tqdm_kwargs = get_tqdm()
 set_seed()
 # %%
@@ -66,6 +65,7 @@ def train(
     scheduler = kwargs.get("scheduler", None)
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
+    tqdm_enabled = kwargs.get("tqdm_enabled", False)
 
     print(f"Running on device: {device}")
 
@@ -103,13 +103,13 @@ def train(
             new_lr = False
 
         # Epoch header
-        if not TQDM_FLAG:
+        if not tqdm_enabled:
             line0 = f"Epoch {epoch + 1}/{epochs}"
             if current_lr is not None:
                 line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
             print(line0)
 
-        pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
         # params_before = [p.detach().clone() for p in model.parameters() if p.requires_grad]
@@ -185,7 +185,7 @@ def train(
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
-            if not TQDM_FLAG:
+            if not tqdm_enabled:
                 print(line)
                 print("-" * 50)
 
@@ -242,6 +242,7 @@ def predict(
     data_loader,
     device,
     weights=None,
+    tqdm_enabled=True,
 ):
     if weights is not None:
         model.load_state_dict(weights)
@@ -251,7 +252,7 @@ def predict(
     targets, images, preds = [], [], []
 
     with torch.inference_mode():
-        pbar = get_progress_bar(TQDM_FLAG, total=len(data_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(tqdm_enabled, total=len(data_loader), **tqdm_kwargs)
 
         with pbar:
             for image, target in data_loader:

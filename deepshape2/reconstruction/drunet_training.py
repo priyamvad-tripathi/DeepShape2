@@ -48,13 +48,14 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_fine_tuned.pt"
+loc_weights = MODEL_DIR + "drunet_blended.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
 
 tqdm_kwargs = get_tqdm()
+
 # %% Denoiser Model Setup and data
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
 
@@ -64,8 +65,8 @@ group_names_train, group_names_val = group_names[:40], group_names[40:41]
 # Split into train and validation sets
 train_dataset = DenoiseDataset(
     path=loc_data,
-    key="isolated_stamps",
-    # key="blended_stamps",
+    # key="isolated_stamps",
+    key="blended_stamps",
     groups=group_names_train,
     crop=CROP_SIZE,
     # min_flux=50e-06,
@@ -74,8 +75,8 @@ train_dataset = DenoiseDataset(
 
 val_dataset = DenoiseDataset(
     path=loc_data,
-    key="isolated_stamps",
-    # key="blended_stamps",
+    # key="isolated_stamps",
+    key="blended_stamps",
     groups=group_names_val,
     crop=CROP_SIZE,
     # min_flux=50e-06,

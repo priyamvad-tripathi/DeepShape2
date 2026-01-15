@@ -94,19 +94,14 @@ def train(
         model.train()
         batch_losses = []
 
-        if scheduler is not None:
-            current_lr = optimizer.param_groups[0]["lr"]
-            new_lr = current_lr < lr_list[-1]
-            lr_list.append(current_lr)
-        else:
-            current_lr = None
-            new_lr = False
+        current_lr = optimizer.param_groups[0]["lr"]
+        new_lr = current_lr < lr_list[-1]
+        lr_list.append(current_lr)
 
         # Epoch header
         if not tqdm_enabled:
             line0 = f"Epoch {epoch + 1}/{epochs}"
-            if current_lr is not None:
-                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+            line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
             print(line0)
 
         pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
@@ -138,12 +133,12 @@ def train(
                 postfix = {
                     "Train Loss": f"{torch.stack(batch_losses).mean():.{precision}e}",
                 }
-                if current_lr is not None:
-                    postfix["LR"] = (
-                        f"{Color.RED}{current_lr:.4e}{Color.OFF}"
-                        if new_lr
-                        else f"{current_lr:.4e}"
-                    )
+
+                postfix["LR"] = (
+                    f"{Color.RED}{current_lr:.4e}{Color.OFF}"
+                    if new_lr
+                    else f"{current_lr:.4e}"
+                )
 
                 pbar.update(1)
                 pbar.set_postfix(postfix)

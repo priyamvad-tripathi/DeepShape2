@@ -9,7 +9,7 @@ from colorist import Color
 from deepinv.models import DRUNet as DinvDRUNet
 from torch.utils.data import DataLoader
 
-from deepshape2.data.loaders import CenterCrop, DenoiseDataset, RandomSubsetSampler
+from deepshape2.data.loaders import DenoiseDataset, RandomSubsetSampler
 
 # from deepshape2.models.drunet import DRUNet
 from deepshape2.utils import (
@@ -48,14 +48,13 @@ lr_init = 1e-4
 
 
 loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_blended2.pt"
+loc_weights = MODEL_DIR + "drunet_blended.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
 
 
 tqdm_kwargs = get_tqdm()
-crop4 = CenterCrop(4)
 
 # %% Denoiser Model Setup and data
 group_names = [f"patch_{nl + 1:03d}" for nl in range(50)]
@@ -131,8 +130,7 @@ def process_batch(clean_batch, device):
         clean = clean.flip(-2)
 
     # Scale images to [0,1]
-    clean_crop = crop4(clean)
-    peak_vals = clean_crop.amax(dim=(1, 2, 3), keepdim=True)
+    peak_vals = clean.amax(dim=(1, 2, 3), keepdim=True)
     clean_scaled = clean / peak_vals
 
     max_noise = 0.6
@@ -264,10 +262,16 @@ def train_denoiser(
             train_loss_list.append(epoch_loss)
 
             if not TQDM_FLAG:
-                line0 = f"Epoch {epoch + 1}/{epochs}"
+                print("-" * 50)
+
+                header = f"Epoch {epoch + 1}/{epochs}"
+
                 if current_lr is not None:
-                    line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
-                print(line0)
+                    header += f" | LR: {current_lr:.2e}"
+                    if new_lr:
+                        header += " NEW"
+
+                print(header)
                 line = f"Train Loss: {epoch_loss:.{precision}e} "
 
             # --- Validation ---
@@ -304,7 +308,6 @@ def train_denoiser(
 
             if not TQDM_FLAG:
                 print(line)
-                print("-" * 50)
 
         # --- Save checkpoint ---
         if filename:

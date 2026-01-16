@@ -80,7 +80,7 @@ class HQS_PnP(nn.Module):
 # %%
 
 
-def create_model(device, path=cfg["MODEL_DIR"] + "drunet_fine_tuned.pt", **params):
+def create_model(device, path=cfg["MODEL_DIR"] + "drunet_blended.pt", **params):
     """
     Creates HQS_PnP model with DRUNet denoiser.
 

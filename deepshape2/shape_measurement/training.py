@@ -27,7 +27,7 @@ if FINAL:
     keys = ["recon", "psf"]
     model = shapenet_full()
 else:
-    loc_weights = MODEL_DIR + "shape_network_true.pt"
+    loc_weights = MODEL_DIR + "shape_true_l1.pt"
     keys = ["isolated_stamps"]
     model = shapenet()
 
@@ -35,6 +35,7 @@ else:
 device = get_freest_gpu(set_device=True)
 set_seed()
 
+BSIZE = 32
 
 # %% Load Data and Model
 group_names = [f"patch_{nl + 1:03d}" for nl in range(51, 71)]
@@ -58,7 +59,7 @@ val_dataset = ShapeDataset(
 # Initialize DataLoaders
 train_loader = DataLoader(
     train_dataset,
-    batch_size=64,
+    batch_size=BSIZE,
     shuffle=True,
     num_workers=4,
     pin_memory=True,
@@ -69,7 +70,7 @@ train_loader = DataLoader(
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=64,
+    batch_size=BSIZE,
     shuffle=False,
     num_workers=4,
     pin_memory=True,
@@ -86,11 +87,17 @@ model = model.to(device)
 #! Test with different paramters for best results
 n_epochs = 301
 
-scheduler_params = {"factor": 0.5, "patience": 40, "min_lr": 1e-07}
-
 optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()), lr=1e-3, weight_decay=1e-5
+    filter(lambda p: p.requires_grad, model.parameters()),
+    lr=1e-3,
+    weight_decay=1e-5,
 )
+
+scheduler_params = {
+    "factor": 0.5,
+    "patience": 40,
+    "min_lr": 1e-7,
+}
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_params)
 
@@ -105,6 +112,7 @@ best_weights, train_loss_list, val_loss_list = train(
     scheduler=scheduler,
     save_freq=10,
     tqdm_enabled=TQDM_FLAG,
+    loss_fn=torch.nn.SmoothL1Loss(beta=0.01),
 )
 
 # %%  Calculate bias on validation set

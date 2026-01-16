@@ -66,6 +66,8 @@ def train(
     save_freq = kwargs.get("save_freq", 50)
     precision = kwargs.get("precision", 4)
     tqdm_enabled = kwargs.get("tqdm_enabled", False)
+    loss_fn = kwargs.get("loss_fn", torch.nn.MSELoss())
+    ema_alpha = kwargs.get("ema_alpha", 0.1)
 
     print(f"Running on device: {device}")
 
@@ -77,6 +79,7 @@ def train(
         best_weights = checkpoint.get("best_weights")
         val_loss_list = checkpoint.get("val_loss_list", [])
         train_loss_list = checkpoint.get("train_loss_list", [])
+        val_loss_ema = checkpoint.get("val_loss_ema", None)
         lr_list = checkpoint.get("lr_list", [])
         if "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -85,7 +88,6 @@ def train(
         print("No saved checkpoints found. Starting from scratch.")
 
     # --- Training loop ---
-    mse = torch.nn.MSELoss()
 
     for epoch in range(epochs):
         if epoch < current_epoch:
@@ -100,9 +102,10 @@ def train(
 
         # Epoch header
         if not tqdm_enabled:
+            print("-" * 50)
             line0 = f"Epoch {epoch + 1}/{epochs}"
             line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
-            print(line0)
+            print(line0, flush=True)
 
         pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
@@ -121,7 +124,7 @@ def train(
                 # ---------------------------
                 optimizer.zero_grad(set_to_none=True)
                 pred = model(image)
-                loss = mse(pred, target)
+                loss = loss_fn(pred, target)
 
                 loss.backward()
 
@@ -154,35 +157,46 @@ def train(
                 val_loss = validation_loss(
                     model,
                     val_loader,
-                    loss_fn=mse,
+                    loss_fn=loss_fn,
                     device=device,
                 )
                 scheduler.step(val_loss)
-                val_loss_list.append(val_loss)
 
-                is_best = val_loss < best_val_loss
+                # EMA update
+                if val_loss_ema is None:
+                    val_loss_ema = val_loss
+                else:
+                    val_loss_ema = (1 - ema_alpha) * val_loss_ema + ema_alpha * val_loss
+
+                # Step scheduler on smoothed value
+                scheduler.step(val_loss_ema)
+
+                val_loss_list.append(val_loss_ema)
+
+                is_best = val_loss_ema < best_val_loss
                 if is_best:
                     best_epoch = epoch
-                    best_val_loss = val_loss
+                    best_val_loss = val_loss_ema
                     best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Val Loss": (
-                        f"{Color.RED}{val_loss:.4e}{Color.OFF}"
+                        f"{Color.RED}{val_loss_ema:.4e}{Color.OFF}"
                         if is_best
-                        else f"{val_loss:.4e}"
+                        else f"{val_loss_ema:.4e}"
                     ),
                 }
                 pbar.set_postfix(pfix)
-                line += f" | Val Loss: {val_loss:.4e}" + (" BEST" if is_best else "")
+                line += f" | Val Loss: {val_loss_ema:.4e}" + (
+                    " BEST" if is_best else ""
+                )
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
             if not tqdm_enabled:
-                print(line)
-                print("-" * 50)
+                print(line, flush=True)
 
         # --- Save checkpoint ---
         if filename:
@@ -200,6 +214,7 @@ def train(
                     "train_loss_list": train_loss_list,
                     "lr_list": lr_list[1:],
                     "scheduler_state_dict": copy.deepcopy(scheduler.state_dict()),
+                    "val_loss_ema": val_loss_ema,
                 }
 
                 time_elapsed = time_string(time.time() - start_time)

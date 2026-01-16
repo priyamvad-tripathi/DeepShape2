@@ -59,6 +59,7 @@ def train(
     best_epoch = 0
 
     train_loss_list, val_loss_list, lr_list = [], [], [np.inf]
+    val_loss_ema = None
 
     # --- Config ---
     filename = kwargs.get("filename")

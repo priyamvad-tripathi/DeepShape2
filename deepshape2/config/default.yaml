@@ -26,9 +26,9 @@ VAE_lr_init: 1e-4 # Initial learning rate for VAE
 hqs_hyperparams:
   niter: 30
   SIGMA: 0.71e-06
-  f1: 0.2076320305146005
-  f2: 8.855988804161978
-  falpha: 5.052044590041307
+  f1: 0.38046931731218053
+  f2: 3.7035096781994907
+  falpha: 3.1097160530212475
 
 # TQDM parameters
 tqdm:

@@ -69,6 +69,7 @@ def compute_metrics(
         shape_recon[valid_mask] - shape_true[valid_mask], axis=1
     )
 
+    print(f"{label} N valid shapes: {np.sum(valid_mask)} / {len(recon_images)}")
     print(
         f"{label} Shape: Max {np.nanmax(shape_diff):.3f} | Min {np.nanmin(shape_diff):.3f} | Mean {np.nanmean(shape_diff):.3f}"
     )
@@ -94,6 +95,10 @@ psnr_blend, shape_diff_blend, _, flags_recon_blend = compute_metrics(
 )
 
 # Save blended reconstruction
+for name in ["recon", "decon", "dirty", "psf", "psnr", "shape_diff"]:
+    if name in patch_group:
+        del patch_group[name]
+
 patch_group.create_dataset("recon", data=recon_blend, compression="gzip")
 patch_group.create_dataset("decon", data=decon_blend, compression="gzip")
 patch_group.create_dataset("dirty", data=dirty_facet, compression="gzip")
@@ -108,15 +113,32 @@ iso_group = patch_group["isolated_dirty_psf"]
 dirty_iso = iso_group["dirty"]
 psf_iso = iso_group["psf"]
 
-recon_iso_result = reconstruct_facets(dirty_iso, psf_iso, device, num_workers=4)
+# HQS hyperparameters from old config for isolated reconstruction
+recon_iso_result = reconstruct_facets(
+    dirty_iso,
+    psf_iso,
+    device,
+    num_workers=4,
+    hqs_params={
+        "f1": 0.2076320305146005,
+        "f2": 8.855988804161978,
+        "falpha": 5.052044590041307,
+    },
+)
 recon_iso = recon_iso_result["recon"]
 
 psnr_iso, shape_diff_iso, _, flags_recon_iso = compute_metrics(
     recon_iso, iso_images, label="Isolated"
 )
 
+for name in ["recon", "psnr", "shape_diff"]:
+    if name in iso_group:
+        del iso_group[name]
+
 
 iso_group.create_dataset("recon", data=recon_iso, compression="gzip")
 iso_group.create_dataset("psnr", data=psnr_iso, compression="gzip")
 iso_group.create_dataset("shape_diff", data=shape_diff_iso, compression="gzip")
 data.flush()
+# %% Close data
+data.close()

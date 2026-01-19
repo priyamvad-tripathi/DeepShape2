@@ -38,8 +38,8 @@ def parse_args():
         "-fl",
         "--flux",
         type=int,
-        default=50,
-        help="Minimum flux threshold (default: 50)",
+        default=10,
+        help="Minimum flux threshold (default: 10)",
     )
 
     parser.add_argument(
@@ -54,15 +54,16 @@ def parse_args():
         "-n",
         "--n-trials",
         type=int,
-        default=200,
-        help="Number of Optuna trials (default: 200)",
+        default=100,
+        help="Number of Optuna trials (default: 100)",
     )
 
     parser.add_argument(
         "-s",
         "--size",
         type=int,
-        default=1000,
+        default=1024,
+        help="Size of validation subset (default: 1024)",
     )
 
     return parser.parse_args()
@@ -73,9 +74,9 @@ def parse_args():
 
 def objective(trial, device, val_loader_subset, deblender):
     """Optuna objective: tune f1, f2, falpha."""
-    f1 = trial.suggest_float("f1", 0, 0.5)
+    f1 = trial.suggest_float("f1", 0, 0.6)
     f2 = trial.suggest_float("f2", 1, 10)
-    falpha = trial.suggest_float("falpha", 0, 4)
+    falpha = trial.suggest_float("falpha", 0, 10)
 
     model = create_model(device=device, f1=f1, f2=f2, falpha=falpha)
     model.eval()
@@ -237,9 +238,9 @@ if __name__ == "__main__":
     N_TRIALS = args.n_trials
     SIZE = args.size
 
-    # MIN_FLUX = 50
+    # MIN_FLUX = 10
     # BATCH_SIZE = 128
-    # SIZE = 1000
+    # SIZE = 8192
 
     # --- Load Config and Data
     DATA_DIR = cfg["DATA_DIR"]
@@ -306,7 +307,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = f"facets_deblend_flux_{MIN_FLUX}"
+    study_name = "facets_1k_new"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(
@@ -358,8 +359,8 @@ if __name__ == "__main__":
 
     # --- Optuna visualization
     fig1 = optuna.visualization.plot_parallel_coordinate(study)
-    fig1.write_html(optuna_trials_dir + f"Figs/parallel_coordinate_{study_name}.html")
+    fig1.show()
     fig2 = optuna.visualization.plot_optimization_history(study)
-    fig2.write_html(optuna_trials_dir + f"Figs/optimization_history_{study_name}.html")
+    fig2.show()
     fig3 = optuna.visualization.plot_param_importances(study)
-    fig3.write_html(optuna_trials_dir + f"Figs/param_importances_{study_name}.html")
+    fig3.show()

@@ -84,16 +84,18 @@ def objective(trial, device, val_loader_subset, deblender):
 
     ssim_values = []
     with torch.inference_mode():
-        for im, isolated_stamp, blended_stamp in val_loader_subset:
+        for im, isolated_stamp, _ in val_loader_subset:
             im = im.to(device, non_blocking=True)
 
             # Deconvolution
             deconvolved = model(im)
 
             # Deblend
-            decon_scaled = torch.arcsinh_(deconvolved.mul_(SCALE_FAC))
-            decon_deblended = deblender(decon_scaled)[0]
-            recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
+            # decon_scaled = torch.arcsinh_(deconvolved.mul_(SCALE_FAC))
+            # decon_deblended = deblender(decon_scaled)[0]
+            # recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
+
+            recon = deconvolved
 
             ssim_values.append(
                 ssim_batch(
@@ -307,7 +309,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = "facets_1k_new"
+    study_name = "facets_iso_big"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(

@@ -84,18 +84,16 @@ def objective(trial, device, val_loader_subset, deblender):
 
     ssim_values = []
     with torch.inference_mode():
-        for im, isolated_stamp, _ in val_loader_subset:
+        for im, isolated_stamp, blended_stamp in val_loader_subset:
             im = im.to(device, non_blocking=True)
 
             # Deconvolution
             deconvolved = model(im)
 
             # Deblend
-            # decon_scaled = torch.arcsinh_(deconvolved.mul_(SCALE_FAC))
-            # decon_deblended = deblender(decon_scaled)[0]
-            # recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
-
-            recon = deconvolved
+            decon_scaled = torch.arcsinh_(deconvolved.mul_(SCALE_FAC))
+            decon_deblended = deblender(decon_scaled)[0]
+            recon = torch.sinh_(decon_deblended).div_(SCALE_FAC)
 
             ssim_values.append(
                 ssim_batch(
@@ -309,7 +307,7 @@ if __name__ == "__main__":
     )
 
     # --- Optuna study
-    study_name = "facets_iso_big"
+    study_name = f"facets_flux_{MIN_FLUX}_size_{SIZE}"
     optuna_trials_dir = f"{DATA_DIR}/optuna_trials/"
     os.makedirs(optuna_trials_dir, exist_ok=True)
     study = optuna.create_study(
@@ -361,8 +359,8 @@ if __name__ == "__main__":
 
     # --- Optuna visualization
     fig1 = optuna.visualization.plot_parallel_coordinate(study)
-    fig1.show()
+    fig1.write_html(optuna_trials_dir + f"Figs/parallel_coordinate_{study_name}.html")
     fig2 = optuna.visualization.plot_optimization_history(study)
-    fig2.show()
+    fig2.write_html(optuna_trials_dir + f"Figs/optimization_history_{study_name}.html")
     fig3 = optuna.visualization.plot_param_importances(study)
-    fig3.show()
+    fig3.write_html(optuna_trials_dir + f"Figs/param_importances_{study_name}.html")

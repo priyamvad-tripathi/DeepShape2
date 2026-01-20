@@ -156,7 +156,7 @@ plot(
 peak = iso_images.max(axis=(1, 2))
 size = patch_df["size"].values[mask_flux] * 1.6783469900166605
 peak_edges = np.linspace(0, 1.8, 7)
-size_edges = np.linspace(0, 5, 7)
+size_edges = np.linspace(0, 4.6, 7)
 
 metric_dependence(
     [[psnr_iso, psnr_blend], [shape_diff_iso, shape_diff_blend]],

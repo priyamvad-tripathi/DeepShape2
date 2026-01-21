@@ -35,7 +35,7 @@ def validation_loss(model, val_loader, loss_fn, device):
 
             pred = model(image)
 
-            val_loss = loss_fn(target, pred)
+            val_loss = loss_fn(pred, target)
             val_loss_all.append(val_loss)
 
     # Concatenate all batches and move to CPU once

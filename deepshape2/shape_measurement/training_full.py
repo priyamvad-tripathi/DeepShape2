@@ -87,17 +87,22 @@ model = model.to(device)
 
 # PSF correction only
 if STAGE == 1:
-    # Freeze shape estimator
+    # Freeze pretrained equivariant features
     for p in model.eq.parameters():
         p.requires_grad = False
 
+    # Train both heads
     for p in model.base_head.parameters():
-        p.requires_grad = False
+        p.requires_grad = True
 
-    # Train PSF residual head only
+    for p in model.psf_head.parameters():
+        p.requires_grad = True
+
     optimizer = torch.optim.Adam(
-        model.psf_head.parameters(),
-        lr=2e-3,
+        [
+            {"params": model.base_head.parameters(), "lr": 1e-3},
+            {"params": model.psf_head.parameters(), "lr": 2e-3},
+        ],
         weight_decay=0.0,
     )
 
@@ -108,7 +113,6 @@ if STAGE == 1:
 
     n_epochs = 40
 
-    # Dummy scheduler
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
         factor=0.5,
@@ -128,13 +132,10 @@ if STAGE == 2:
     for p in model.eq.parameters():
         p.requires_grad = True
 
-    # Keep baseline head frozen
-    for p in model.base_head.parameters():
-        p.requires_grad = False
-
     optimizer = torch.optim.Adam(
         [
             {"params": model.psf_head.parameters(), "lr": 1e-3},
+            {"params": model.base_head.parameters(), "lr": 5e-4},
             {"params": model.eq.parameters(), "lr": 1e-4},
         ],
         weight_decay=1e-6,
@@ -162,18 +163,15 @@ if STAGE == 3:
     )
     model.load_state_dict(ckpt["best_weights"])
 
-    # Unfreeze everything
-    for p in model.eq.parameters():
-        p.requires_grad = True
-
-    for p in model.base_head.parameters():
+    # Everything already unfrozen, but make it explicit
+    for p in model.parameters():
         p.requires_grad = True
 
     optimizer = torch.optim.Adam(
         [
             {"params": model.psf_head.parameters(), "lr": 5e-4},
-            {"params": model.eq.parameters(), "lr": 5e-5},
             {"params": model.base_head.parameters(), "lr": 5e-5},
+            {"params": model.eq.parameters(), "lr": 5e-5},
         ],
         weight_decay=1e-6,
     )

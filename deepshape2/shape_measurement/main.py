@@ -192,6 +192,7 @@ def train(
                 line += f" | Val Loss: {val_loss_ema:.4e}" + (
                     " BEST" if is_best else ""
                 )
+                line += f"\n Time Elapsed: {time_string(time.time() - start_time)}"
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
@@ -273,6 +274,8 @@ def predict(
                 target_gpu = target.to(device, non_blocking=True)
 
                 pred = model(image_gpu)
+                if isinstance(pred, (tuple, list)):
+                    pred = pred[0]
 
                 # Append GPU tensors
                 targets.append(target_gpu.detach().cpu().numpy())
@@ -284,3 +287,27 @@ def predict(
         np.concatenate(targets),
         np.concatenate(images).squeeze(),
     )
+
+
+# %%
+class TupleSmoothL1WithBias(torch.nn.Module):
+    def __init__(self, beta=0.05, lambda_bias=0.0):
+        super().__init__()
+        self.beta = beta
+        self.lambda_bias = lambda_bias
+
+    def forward(self, output, target):
+        if isinstance(output, (tuple, list)):
+            e_pred = output[0]
+        else:
+            e_pred = output
+
+        err = e_pred - target
+
+        scatter = torch.nn.functional.smooth_l1_loss(e_pred, target, beta=self.beta)
+
+        if self.lambda_bias > 0:
+            bias = err.mean(dim=0).pow(2).sum()
+            return scatter + self.lambda_bias * bias
+        else:
+            return scatter

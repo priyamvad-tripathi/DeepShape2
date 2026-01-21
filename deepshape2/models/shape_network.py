@@ -109,6 +109,32 @@ class shapenet(torch.nn.Module):
 
 
 # %% Full Model with PSF encoding
+
+
+class PSFResidualHead(torch.nn.Module):
+    def __init__(self, feat_dim, psf_dim, hidden_dim=128):
+        super().__init__()
+
+        self.psf_gate = torch.nn.Sequential(
+            torch.nn.Linear(psf_dim, hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, feat_dim),
+            torch.nn.Sigmoid(),
+        )
+
+        self.delta_head = torch.nn.Sequential(
+            torch.nn.Linear(feat_dim, hidden_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(hidden_dim, 2),
+        )
+
+    def forward(self, feat, psf_latent):
+        gate = self.psf_gate(psf_latent)
+        feat_mod = feat * gate
+        delta_e = self.delta_head(feat_mod)
+        return delta_e
+
+
 class shapenet_full(torch.nn.Module):
     def __init__(
         self,
@@ -123,36 +149,43 @@ class shapenet_full(torch.nn.Module):
         if eq_path is not None:
             self.eq.load_state_dict(torch.load(eq_path))
 
-        if encoder_path is not None:
-            autoencoder = torch.jit.load(encoder_path)
-            self.encode = autoencoder.encoder
-        else:
-            raise Exception("Encoder path must be provided for full model.")
+        autoencoder = torch.jit.load(encoder_path)
+        self.encode = autoencoder.encoder
+        self.encode.eval()
+        for p in self.encode.parameters():
+            p.requires_grad = False
 
-        c1 = 32 * 12 * 12
-        c2 = 1152
+        # feature dimensions
+        self.eq_feat_dim = 32 * 12 * 12
+        self.psf_latent_dim = 1152
 
-        # Fully Connected classifier
-        self.fully_net = torch.nn.Sequential(
-            torch.nn.BatchNorm1d(c1 + c2),
+        # baseline head for shape prediction
+        self.base_head = torch.nn.Sequential(
+            torch.nn.BatchNorm1d(self.eq_feat_dim),
             torch.nn.ReLU(),
-            torch.nn.Linear(c1 + c2, 4),
+            torch.nn.Linear(self.eq_feat_dim, 4),
             torch.nn.ReLU(),
             torch.nn.Linear(4, 2),
             torch.nn.Tanh(),
         )
 
-    def forward(self, input: torch.Tensor):
-        im = input[:, 0, :, :].unsqueeze(1)
-        psf = input[:, 1, :, :].unsqueeze(1)
+        # PSF-conditioned residual head
+        self.psf_head = PSFResidualHead(
+            feat_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim
+        )
 
-        im = self.eq(im)
-        psf = self.encode(psf)
+    def forward(self, input):
+        im = input[:, 0:1]
+        psf = input[:, 1 : 1 + 1]
 
-        im = torch.nn.Flatten()(im)
+        feat = self.eq(im)
+        feat = torch.flatten(feat, start_dim=1)
 
-        features = torch.cat((im, psf), dim=1)
+        with torch.no_grad():
+            psf_latent = self.encode(psf)
 
-        out = self.fully_net(features)
+        e_base = self.base_head(feat)
+        delta_e = self.psf_head(feat, psf_latent)
 
-        return out
+        e_pred = e_base + delta_e
+        return e_pred, e_base, delta_e

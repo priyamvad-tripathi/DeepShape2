@@ -5,10 +5,11 @@ from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import ShapeDataset
 from deepshape2.models import shapenet_full
-from deepshape2.shape_measurement.main import predict, train
+from deepshape2.shape_measurement.main import TupleSmoothL1WithBias, predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
 
+STAGE = 1
 # %% Load Config and Set Parameters
 cfg = load_config()
 TQDM_FLAG = cfg["TQDM"]
@@ -21,7 +22,7 @@ MODEL_DIR = cfg["MODEL_DIR"]
 loc_data = DATA_DIR + "wide_set.h5"
 
 
-loc_weights = MODEL_DIR + "shape_network_full_eq_wts.pt"
+loc_weights = MODEL_DIR + f"shape_full_stg_{STAGE}.pt"
 keys = ["recon", "psf"]
 model = shapenet_full()
 
@@ -83,25 +84,126 @@ model = model.to(device)
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
-n_epochs = 301
 
-# Freeze the encoder block
-for param in model.encode.parameters():
-    param.requires_grad = False
+# PSF correction only
+if STAGE == 1:
+    # Freeze shape estimator
+    for p in model.eq.parameters():
+        p.requires_grad = False
 
-optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=1e-3,
-    weight_decay=1e-5,
-)
+    for p in model.base_head.parameters():
+        p.requires_grad = False
 
-scheduler_params = {
-    "factor": 0.5,
-    "patience": 40,
-    "min_lr": 1e-7,
-}
+    # Train PSF residual head only
+    optimizer = torch.optim.Adam(
+        model.psf_head.parameters(),
+        lr=2e-3,
+        weight_decay=0.0,
+    )
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, **scheduler_params)
+    loss_fn = TupleSmoothL1WithBias(
+        beta=0.05,
+        lambda_bias=0.0,
+    )
+
+    n_epochs = 40
+
+    # Dummy scheduler
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        factor=0.5,
+        patience=1000,
+        min_lr=1e-6,
+    )
+
+# Partial Unfreezing
+if STAGE == 2:
+    # Load best weights from stage 1
+    ckpt = torch.load(
+        MODEL_DIR + "shape_psf_stg_1.pt", map_location=device, weights_only=True
+    )
+    model.load_state_dict(ckpt["best_weights"])
+
+    # Unfreeze equivariant backbone
+    for p in model.eq.parameters():
+        p.requires_grad = True
+
+    # Keep baseline head frozen
+    for p in model.base_head.parameters():
+        p.requires_grad = False
+
+    optimizer = torch.optim.Adam(
+        [
+            {"params": model.psf_head.parameters(), "lr": 1e-3},
+            {"params": model.eq.parameters(), "lr": 1e-4},
+        ],
+        weight_decay=1e-6,
+    )
+
+    loss_fn = TupleSmoothL1WithBias(
+        beta=0.05,
+        lambda_bias=0.1,
+    )
+
+    n_epochs = 80
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        factor=0.5,
+        patience=20,
+        min_lr=5e-6,
+    )
+
+# Full fine-tuning
+if STAGE == 3:
+    # Load best weights from stage 2
+    ckpt = torch.load(
+        MODEL_DIR + "shape_psf_stg_2.pt", map_location=device, weights_only=True
+    )
+    model.load_state_dict(ckpt["best_weights"])
+
+    # Unfreeze everything
+    for p in model.eq.parameters():
+        p.requires_grad = True
+
+    for p in model.base_head.parameters():
+        p.requires_grad = True
+
+    optimizer = torch.optim.Adam(
+        [
+            {"params": model.psf_head.parameters(), "lr": 5e-4},
+            {"params": model.eq.parameters(), "lr": 5e-5},
+            {"params": model.base_head.parameters(), "lr": 5e-5},
+        ],
+        weight_decay=1e-6,
+    )
+
+    loss_fn = TupleSmoothL1WithBias(
+        beta=0.02,
+        lambda_bias=0.05,
+    )
+
+    n_epochs = 120
+
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer,
+        factor=0.5,
+        patience=15,
+        min_lr=1e-6,
+    )
+
+# optimizer = torch.optim.Adam(
+#     filter(lambda p: p.requires_grad, model.parameters()),
+#     lr=5e-4,
+#     weight_decay=1e-6,
+# )
+
+# scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+#     optimizer,
+#     factor=0.5,
+#     patience=20,
+#     min_lr=1e-6,
+# )
 
 best_weights, train_loss_list, val_loss_list = train(
     model,
@@ -114,7 +216,7 @@ best_weights, train_loss_list, val_loss_list = train(
     scheduler=scheduler,
     save_freq=10,
     tqdm_enabled=TQDM_FLAG,
-    loss_fn=torch.nn.SmoothL1Loss(beta=0.01),
+    loss_fn=loss_fn,
 )
 
 # %%  Calculate bias on validation set

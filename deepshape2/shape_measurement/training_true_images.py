@@ -4,12 +4,10 @@ import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import ShapeDataset
-from deepshape2.models import shapenet, shapenet_full
+from deepshape2.models import shapenet
 from deepshape2.shape_measurement.main import predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
-
-FINAL = False
 
 # %% Load Config and Set Parameters
 cfg = load_config()
@@ -22,14 +20,13 @@ MODEL_DIR = cfg["MODEL_DIR"]
 
 loc_data = DATA_DIR + "wide_set.h5"
 
-if FINAL:
-    loc_weights = MODEL_DIR + "shape_network_full.pt"
-    keys = ["recon", "psf"]
-    model = shapenet_full()
-else:
-    loc_weights = MODEL_DIR + "shape_true_l1.pt"
-    keys = ["isolated_stamps"]
-    model = shapenet()
+loc_weights = MODEL_DIR + "shape_network_true.pt"
+keys = ["isolated_stamps"]
+model = shapenet()
+
+group_names = [f"patch_{nl + 1:03d}" for nl in range(51, 71)]
+group_names_train, group_names_val = group_names[:15], group_names[15:]
+
 
 # Torch Parameters
 device = get_freest_gpu(set_device=True)
@@ -38,10 +35,6 @@ set_seed()
 BSIZE = 32
 
 # %% Load Data and Model
-group_names = [f"patch_{nl + 1:03d}" for nl in range(51, 71)]
-
-
-group_names_train, group_names_val = group_names[:15], group_names[15:]
 
 # Split into train and validation sets
 train_dataset = ShapeDataset(
@@ -85,7 +78,7 @@ model = model.to(device)
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
-n_epochs = 301
+n_epochs = 320
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()),
@@ -140,7 +133,6 @@ print(
 )
 
 # %% Save eq weights
-if not FINAL:
-    model.eval()
-    model.load_state_dict(best_weights)
-    torch.save(model.eq.state_dict(), MODEL_DIR + "eq_block.pt")
+model.eval()
+model.load_state_dict(best_weights)
+torch.save(model.eq.state_dict(), MODEL_DIR + "eq_block.pt")

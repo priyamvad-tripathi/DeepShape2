@@ -44,7 +44,7 @@ train_dataset = ShapeDataset(
     keys=keys,
     groups=group_names_train,
     metric_name="psnr",
-    metric_threshold=20,
+    metric_threshold=25,
 )
 
 val_dataset = ShapeDataset(
@@ -52,7 +52,7 @@ val_dataset = ShapeDataset(
     keys=keys,
     groups=group_names_val,
     metric_name="psnr",
-    metric_threshold=20,
+    metric_threshold=25,
 )
 
 # Initialize DataLoaders

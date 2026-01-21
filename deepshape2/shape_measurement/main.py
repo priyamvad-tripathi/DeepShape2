@@ -192,7 +192,7 @@ def train(
                 line += f" | Val Loss: {val_loss_ema:.4e}" + (
                     " BEST" if is_best else ""
                 )
-                line += f"\n Time Elapsed: {time_string(time.time() - start_time)}"
+                line += f" | Time Elapsed: {time_string(time.time() - start_time)}"
 
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}

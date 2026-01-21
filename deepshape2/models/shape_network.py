@@ -6,6 +6,7 @@ from deepshape2.utils import load_config, set_seed
 
 set_seed()
 cfg = load_config()
+MODEL_DIR = cfg["MODEL_DIR"]
 
 __all__ = ["shapenet", "shapenet_full"]
 # %% Equivariant Block for feature extraction from images
@@ -110,12 +111,23 @@ class shapenet(torch.nn.Module):
 # %% Full Model with PSF encoding
 class shapenet_full(torch.nn.Module):
     def __init__(
-        self, eq_block=eq_block(), encoder_path=cfg["MODEL_DIR"] + "autoencoder_jit.pt"
+        self,
+        eq_block=eq_block(),
+        encoder_path=MODEL_DIR + "autoencoder_jit.pt",
+        eq_path=MODEL_DIR + "eq_block.pt",
     ):
         super().__init__()
 
         self.eq = eq_block
-        self.encode = torch.jit.load(encoder_path)
+
+        if eq_path is not None:
+            self.eq.load_state_dict(torch.load(eq_path))
+
+        if encoder_path is not None:
+            autoencoder = torch.jit.load(encoder_path)
+            self.encode = autoencoder.encoder
+        else:
+            raise Exception("Encoder path must be provided for full model.")
 
         c1 = 32 * 12 * 12
         c2 = 1152

@@ -78,15 +78,18 @@ class MultiGroupIndexMixin:
     def __len__(self):
         return self.cumulative_sizes[-1]
 
-    def _locate(self, global_idx):
+    def _locate(self, global_idx, apply_valid_indices=True):
         if global_idx < 0 or global_idx >= self.cumulative_sizes[-1]:
             raise IndexError(f"Index {global_idx} out of range")
 
         group_idx = bisect.bisect_right(self.cumulative_sizes, global_idx)
         prev = 0 if group_idx == 0 else self.cumulative_sizes[group_idx - 1]
         offset = global_idx - prev
-        local_idx = self.valid_indices[group_idx][offset]
-        return group_idx, local_idx
+
+        if apply_valid_indices:
+            return group_idx, self.valid_indices[group_idx][offset]
+        else:
+            return group_idx, offset
 
 
 # %% Blending dataloader
@@ -261,7 +264,14 @@ class DenoiseDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
 
 # %% Shape Measurement Loader
 class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
-    def __init__(self, path, keys, groups=None):
+    def __init__(
+        self,
+        path,
+        keys,
+        groups=None,
+        metric_name=None,
+        metric_threshold=20,
+    ):
         if not os.path.exists(path):
             raise FileNotFoundError(f"HDF5 file not found: {path}")
 
@@ -272,6 +282,9 @@ class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
         self.valid_indices = []
         self.labels_per_group = []
 
+        self.metric_name = metric_name
+        self.metric_threshold = metric_threshold
+
         with h5py.File(self.path, "r") as hf:
             available = list(hf.keys())
             self.groups = groups if groups is not None else available
@@ -279,14 +292,37 @@ class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
             for g in self.groups:
                 group = hf[g]
                 total = len(group[self.keys[0]])
-                self.valid_indices.append(np.arange(total))
-                self.group_sizes.append(total)
 
+                # -------------------------
+                # Metric based filtering
+                # -------------------------
+                if metric_name is not None:
+                    if metric_name not in group:
+                        raise KeyError(
+                            f"Metric '{metric_name}' not found in group '{g}'"
+                        )
+
+                    metric_vals = group[metric_name][:]
+                    valid_idx = np.where(metric_vals > metric_threshold)[0]
+                else:
+                    valid_idx = np.arange(total)
+
+                self.valid_indices.append(valid_idx)
+                self.group_sizes.append(len(valid_idx))
+
+                # -------------------------
+                # Labels (apply flux mask first)
+                # -------------------------
                 df = group["patch_df"][()]
-                mask = df["flux_mask"]
-                self.labels_per_group.append(
-                    np.stack([df["e1"][mask], df["e2"][mask]], axis=1)
+                flux_mask = df["flux_mask"]
+
+                labels = np.stack(
+                    [df["e1"][flux_mask], df["e2"][flux_mask]],
+                    axis=1,
                 )
+
+                # metric + keys are full length, labels are flux-masked
+                self.labels_per_group.append(labels[valid_idx])
 
         self.cumulative_sizes = np.cumsum(self.group_sizes).tolist()
         self._hf = None
@@ -313,9 +349,16 @@ class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
                 [self[int(i)] for i in idx] if isinstance(idx, list) else self[int(idx)]
             )
 
-        group_idx, local_idx = self._locate(idx)
+        # -------------------------
+        # Correct index resolution
+        # -------------------------
+        group_idx, local_pos = self._locate(idx, apply_valid_indices=False)
+        local_idx = self.valid_indices[group_idx][local_pos]
         group = hf[self.groups[group_idx]]
 
+        # -------------------------
+        # Load images
+        # -------------------------
         imgs = [
             self._normalize(np.array(group[k][local_idx], dtype=np.float32))
             for k in self.keys
@@ -325,7 +368,11 @@ class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
         if img.shape[-1] > 128 or img.shape[-2] > 128:
             img = crop_128(img)
 
-        y = torch.from_numpy(self.labels_per_group[group_idx][local_idx]).float()
+        # -------------------------
+        # Labels
+        # -------------------------
+        y = torch.from_numpy(self.labels_per_group[group_idx][local_pos]).float()
+
         return img, y
 
     def __del__(self):

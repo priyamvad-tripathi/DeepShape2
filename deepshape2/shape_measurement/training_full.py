@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from deepshape2.data.loaders import ShapeDataset
-from deepshape2.models import shapenet
+from deepshape2.models import shapenet_full
 from deepshape2.shape_measurement.main import predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
@@ -20,12 +20,13 @@ MODEL_DIR = cfg["MODEL_DIR"]
 
 loc_data = DATA_DIR + "wide_set.h5"
 
-loc_weights = MODEL_DIR + "shape_network_true.pt"
-keys = ["isolated_stamps"]
-model = shapenet()
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(51, 71)]
-group_names_train, group_names_val = group_names[:15], group_names[15:]
+loc_weights = MODEL_DIR + "shape_network_full_eq_wts.pt"
+keys = ["recon", "psf"]
+model = shapenet_full()
+
+group_names = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
+group_names_train, group_names_val = group_names[:22], group_names[22:]
 
 
 # Torch Parameters
@@ -41,14 +42,16 @@ train_dataset = ShapeDataset(
     path=loc_data,
     keys=keys,
     groups=group_names_train,
-    metric_name=None,
+    metric_name="psnr",
+    metric_threshold=20,
 )
 
 val_dataset = ShapeDataset(
     path=loc_data,
     keys=keys,
     groups=group_names_val,
-    metric_name=None,
+    metric_name="psnr",
+    metric_threshold=20,
 )
 
 # Initialize DataLoaders
@@ -76,11 +79,15 @@ val_loader = DataLoader(
 
 #  Load model to device
 model = model.to(device)
-# print(model(torch.randn(10, 1, 128, 128).to(device)).size())
+# print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
-n_epochs = 320
+n_epochs = 301
+
+# Freeze the encoder block
+for param in model.encode.parameters():
+    param.requires_grad = False
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()),
@@ -129,12 +136,7 @@ ypred, ytest, images = predict(
 )
 
 # Calculate Bias
-plot_bias(ypred, ytest, power=1e4, ellipticity_cutoff=1, lim=0.05)
+plot_bias(ypred, ytest, power=1e3, ellipticity_cutoff=1, lim=0.4)
 print(
     f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
 )
-
-# %% Save eq weights
-model.eval()
-model.load_state_dict(best_weights)
-torch.save(model.eq.state_dict(), MODEL_DIR + "eq_block.pt")

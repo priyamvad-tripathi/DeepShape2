@@ -147,9 +147,9 @@ class shapenet_full(torch.nn.Module):
         self.eq = eq_block
 
         if eq_path is not None:
-            self.eq.load_state_dict(torch.load(eq_path))
+            self.eq.load_state_dict(torch.load(eq_path, map_location="cpu"))
 
-        autoencoder = torch.jit.load(encoder_path)
+        autoencoder = torch.jit.load(encoder_path, map_location="cpu")
         self.encode = autoencoder.encoder
         self.encode.eval()
         for p in self.encode.parameters():

@@ -22,7 +22,7 @@ MODEL_DIR = cfg["MODEL_DIR"]
 loc_data = DATA_DIR + "wide_set.h5"
 
 
-loc_weights = MODEL_DIR + f"shape_full_stg_{STAGE}.pt"
+loc_weights = MODEL_DIR + f"shape_full_stg_{STAGE}_fast.pt"
 keys = ["recon", "psf"]
 model = shapenet_full()
 
@@ -100,14 +100,14 @@ if STAGE == 1:
 
     optimizer = torch.optim.Adam(
         [
-            {"params": model.base_head.parameters(), "lr": 1e-3},
-            {"params": model.psf_head.parameters(), "lr": 2e-3},
+            {"params": model.base_head.parameters(), "lr": 2e-3},
+            {"params": model.psf_head.parameters(), "lr": 5e-3},
         ],
         weight_decay=0.0,
     )
 
     loss_fn = TupleSmoothL1WithBias(
-        beta=0.05,
+        beta=0.1,
         lambda_bias=0.0,
     )
 

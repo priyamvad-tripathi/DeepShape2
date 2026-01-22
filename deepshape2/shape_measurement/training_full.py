@@ -17,11 +17,7 @@ print("TQDM enabled:", TQDM_FLAG)
 DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
 
-loc_data = DATA_DIR + "wide_set.h5"
-
-
 loc_weights = MODEL_DIR + "shape_full.pt"
-keys = ["isolated_stamps"]
 model = shapenet_full()
 
 group_names = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
@@ -37,7 +33,7 @@ BSIZE = 32
 # %% Load Data and Model
 
 train_loader, val_loader = build_fast_loaders(
-    npz_path=DATA_DIR + "train_dataset_psnr_25.npz",
+    dataset_dir=DATA_DIR + "trainset_psnr_25",
     train_groups=group_names_train,
     val_groups=group_names_val,
     batch_size=BSIZE,

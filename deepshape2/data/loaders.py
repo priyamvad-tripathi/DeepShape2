@@ -420,14 +420,14 @@ class ShapeDatasetLight(Dataset):
 
 
 def build_fast_loaders(
-    curated_dir,
+    dataset_dir,
     train_groups,
     val_groups,
     batch_size=32,
     num_workers=4,
 ):
-    group_names = np.load(os.path.join(curated_dir, "group_names.npy"))
-    group_offsets = np.load(os.path.join(curated_dir, "group_offsets.npy"))
+    group_names = np.load(os.path.join(dataset_dir, "group_names.npy"))
+    group_offsets = np.load(os.path.join(dataset_dir, "group_offsets.npy"))
 
     def groups_to_indices(groups):
         idx = []
@@ -442,7 +442,7 @@ def build_fast_loaders(
     train_idx = groups_to_indices(train_groups)
     val_idx = groups_to_indices(val_groups)
 
-    dataset = ShapeDatasetLight(curated_dir)
+    dataset = ShapeDatasetLight(dataset_dir)
 
     train_loader = DataLoader(
         Subset(dataset, train_idx),

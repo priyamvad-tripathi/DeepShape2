@@ -5,7 +5,7 @@ import os
 import h5py
 import numpy as np
 import torch
-from torch.utils.data import Dataset, Sampler, get_worker_info
+from torch.utils.data import DataLoader, Dataset, Sampler, Subset, get_worker_info
 
 from deepshape2.utils import load_config, set_seed
 
@@ -263,7 +263,7 @@ class DenoiseDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
 
 
 # %% Shape Measurement Loader
-class ShapeDataset(Dataset):
+class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
     def __init__(
         self,
         path,
@@ -272,70 +272,111 @@ class ShapeDataset(Dataset):
         metric_name=None,
         metric_threshold=20,
     ):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"HDF5 file not found: {path}")
+
         self.path = path
         self.keys = [keys] if isinstance(keys, str) else keys
+        self.groups = []
+        self.group_sizes = []
+        self.valid_indices = []
+        self.labels_per_group = []
+
         self.metric_name = metric_name
         self.metric_threshold = metric_threshold
 
-        self.samples = []  # list of (group_name, local_idx)
-        self.labels = []  # aligned labels
-
         with h5py.File(self.path, "r") as hf:
-            all_groups = groups if groups is not None else list(hf.keys())
+            available = list(hf.keys())
+            self.groups = groups if groups is not None else available
 
-            for g in all_groups:
+            for g in self.groups:
                 group = hf[g]
+                total = len(group[self.keys[0]])
 
+                # -------------------------
+                # Metric based filtering
+                # -------------------------
                 if metric_name is not None:
+                    if metric_name not in group:
+                        raise KeyError(
+                            f"Metric '{metric_name}' not found in group '{g}'"
+                        )
+
                     metric_vals = group[metric_name][:]
-                    valid = np.where(metric_vals > metric_threshold)[0]
+                    valid_idx = np.where(metric_vals > metric_threshold)[0]
                 else:
-                    valid = np.arange(len(group[self.keys[0]]))
+                    valid_idx = np.arange(total)
 
-                # restore locality
-                valid = np.sort(valid)
+                self.valid_indices.append(valid_idx)
+                self.group_sizes.append(len(valid_idx))
 
+                # -------------------------
+                # Labels (apply flux mask first)
+                # -------------------------
                 df = group["patch_df"][()]
                 flux_mask = df["flux_mask"]
+
                 labels = np.stack(
                     [df["e1"][flux_mask], df["e2"][flux_mask]],
                     axis=1,
                 )
 
-                for i, local_idx in enumerate(valid):
-                    self.samples.append((g, local_idx))
-                    self.labels.append(labels[i])
+                # metric + keys are full length, labels are flux-masked
+                self.labels_per_group.append(labels[valid_idx])
 
-        self.labels = torch.from_numpy(np.asarray(self.labels)).float()
+        self.cumulative_sizes = np.cumsum(self.group_sizes).tolist()
         self._hf = None
 
-    def __len__(self):
-        return len(self.samples)
-
-    def _get_h5(self):
-        if self._hf is None:
-            self._hf = h5py.File(self.path, "r")
-        return self._hf
+    @staticmethod
+    def _normalize(img):
+        img_min = img.min()
+        rng = img.max() - img_min
+        return (img - img_min) / rng if rng > 0 else img
 
     def __getitem__(self, idx):
         hf = self._get_h5()
-        g, local_idx = self.samples[idx]
 
-        imgs = [np.asarray(hf[g][k][local_idx], dtype=np.float32) for k in self.keys]
+        if isinstance(idx, (slice, list, tuple, np.ndarray)):
+            return (
+                [self[int(i)] for i in range(*idx.indices(len(self)))]
+                if isinstance(idx, slice)
+                else [self[int(i)] for i in idx]
+            )
 
+        if torch.is_tensor(idx):
+            idx = idx.item() if idx.dim() == 0 else idx.tolist()
+            return (
+                [self[int(i)] for i in idx] if isinstance(idx, list) else self[int(idx)]
+            )
+
+        # -------------------------
+        # Correct index resolution
+        # -------------------------
+        group_idx, local_pos = self._locate(idx, apply_valid_indices=False)
+        local_idx = self.valid_indices[group_idx][local_pos]
+        group = hf[self.groups[group_idx]]
+
+        # -------------------------
+        # Load images
+        # -------------------------
+        imgs = [
+            self._normalize(np.array(group[k][local_idx], dtype=np.float32))
+            for k in self.keys
+        ]
         img = torch.from_numpy(np.stack(imgs, axis=0))
 
         if img.shape[-1] > 128 or img.shape[-2] > 128:
             img = crop_128(img)
 
-        return img.contiguous(), self.labels[idx]
+        # -------------------------
+        # Labels
+        # -------------------------
+        y = torch.from_numpy(self.labels_per_group[group_idx][local_pos]).float()
+
+        return img, y
 
     def __del__(self):
-        try:
-            if self._hf is not None:
-                self._hf.close()
-        except Exception:
-            pass
+        self._cleanup_h5()
 
 
 # %%
@@ -351,3 +392,76 @@ class RandomSubsetSampler(Sampler):
 
     def __len__(self):
         return self.subset_size
+
+
+# %%
+class ShapeDatasetLight(Dataset):
+    def __init__(self, root_dir):
+        self.imgs = np.load(
+            os.path.join(root_dir, "imgs.npy"),
+            mmap_mode="r+",
+        )
+        self.labels = np.load(
+            os.path.join(root_dir, "labels.npy"),
+            mmap_mode="r+",
+        )
+
+    def __len__(self):
+        return self.imgs.shape[0]
+
+    def __getitem__(self, idx):
+        img = torch.as_tensor(self.imgs[idx])
+
+        if img.shape[-1] > 128 or img.shape[-2] > 128:
+            img = crop_128(img)
+
+        label = torch.as_tensor(self.labels[idx])
+        return img, label
+
+
+def build_fast_loaders(
+    curated_dir,
+    train_groups,
+    val_groups,
+    batch_size=32,
+    num_workers=4,
+):
+    group_names = np.load(os.path.join(curated_dir, "group_names.npy"))
+    group_offsets = np.load(os.path.join(curated_dir, "group_offsets.npy"))
+
+    def groups_to_indices(groups):
+        idx = []
+        for g in groups:
+            pos = np.where(group_names == g)[0]
+            if len(pos) == 0:
+                continue
+            start, end = group_offsets[pos[0]]
+            idx.extend(range(start, end))
+        return idx
+
+    train_idx = groups_to_indices(train_groups)
+    val_idx = groups_to_indices(val_groups)
+
+    dataset = ShapeDatasetLight(curated_dir)
+
+    train_loader = DataLoader(
+        Subset(dataset, train_idx),
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        drop_last=True,
+    )
+
+    val_loader = DataLoader(
+        Subset(dataset, val_idx),
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        persistent_workers=True,
+        drop_last=False,
+    )
+
+    return train_loader, val_loader

@@ -1,9 +1,8 @@
 # %%Import Libraries
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
-from deepshape2.data.loaders import ShapeDataset
+from deepshape2.data.loaders import build_fast_loaders
 from deepshape2.models import shapenet_full
 from deepshape2.shape_measurement.main import predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
@@ -21,8 +20,8 @@ MODEL_DIR = cfg["MODEL_DIR"]
 loc_data = DATA_DIR + "wide_set.h5"
 
 
-loc_weights = MODEL_DIR + "shape_full_new.pt"
-keys = ["recon", "psf"]
+loc_weights = MODEL_DIR + "shape_full.pt"
+keys = ["isolated_stamps"]
 model = shapenet_full()
 
 group_names = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
@@ -37,41 +36,12 @@ BSIZE = 32
 
 # %% Load Data and Model
 
-# Split into train and validation sets
-train_dataset = ShapeDataset(
-    path=loc_data,
-    keys=keys,
-    groups=group_names_train,
-    metric_name="psnr",
-    metric_threshold=25,
-)
-
-val_dataset = ShapeDataset(
-    path=loc_data,
-    keys=keys,
-    groups=group_names_val,
-    metric_name="psnr",
-    metric_threshold=25,
-)
-
-# Initialize DataLoaders
-train_loader = DataLoader(
-    train_dataset,
+train_loader, val_loader = build_fast_loaders(
+    npz_path=DATA_DIR + "train_dataset_psnr_25.npz",
+    train_groups=group_names_train,
+    val_groups=group_names_val,
     batch_size=BSIZE,
-    shuffle=True,
-    num_workers=1,
-    pin_memory=False,
-    drop_last=True,
-    persistent_workers=True,
-)
-
-val_loader = DataLoader(
-    val_dataset,
-    batch_size=BSIZE,
-    shuffle=False,
-    num_workers=1,
-    pin_memory=False,
-    drop_last=True,
+    num_workers=4,
 )
 
 #  Load model to device

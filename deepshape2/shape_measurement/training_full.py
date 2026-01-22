@@ -22,7 +22,7 @@ MODEL_DIR = cfg["MODEL_DIR"]
 loc_data = DATA_DIR + "wide_set.h5"
 
 
-loc_weights = MODEL_DIR + f"shape_full_stg_{STAGE}_fast.pt"
+loc_weights = MODEL_DIR + f"shape_full_stg_{STAGE}_new2.pt"
 keys = ["recon", "psf"]
 model = shapenet_full()
 
@@ -88,30 +88,18 @@ model = model.to(device)
 # PSF correction only
 if STAGE == 1:
     # Freeze pretrained equivariant features
-    for p in model.eq.parameters():
-        p.requires_grad = False
-
-    # Train both heads
-    for p in model.base_head.parameters():
-        p.requires_grad = True
-
-    for p in model.psf_head.parameters():
-        p.requires_grad = True
+    # for p in model.eq.parameters():
+    #     p.requires_grad = False
 
     optimizer = torch.optim.Adam(
-        [
-            {"params": model.base_head.parameters(), "lr": 2e-3},
-            {"params": model.psf_head.parameters(), "lr": 5e-3},
-        ],
-        weight_decay=0.0,
+        filter(lambda p: p.requires_grad, model.parameters()),
+        lr=1e-3,
+        weight_decay=1e-6,
     )
 
-    loss_fn = TupleSmoothL1WithBias(
-        beta=0.1,
-        lambda_bias=0.0,
-    )
+    loss_fn = torch.nn.MSELoss()
 
-    n_epochs = 40
+    n_epochs = 100
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,

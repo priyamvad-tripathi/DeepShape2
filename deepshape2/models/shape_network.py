@@ -159,33 +159,27 @@ class shapenet_full(torch.nn.Module):
         self.eq_feat_dim = 32 * 12 * 12
         self.psf_latent_dim = 1152
 
-        # baseline head for shape prediction
-        self.base_head = torch.nn.Sequential(
-            torch.nn.BatchNorm1d(self.eq_feat_dim),
+        # Fully Connected classifier
+        self.fully_net = torch.nn.Sequential(
+            torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
             torch.nn.ReLU(),
-            torch.nn.Linear(self.eq_feat_dim, 4),
+            torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
             torch.nn.ReLU(),
             torch.nn.Linear(4, 2),
             torch.nn.Tanh(),
         )
 
-        # PSF-conditioned residual head
-        self.psf_head = PSFResidualHead(
-            feat_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim
-        )
+    def forward(self, input: torch.Tensor):
+        im = input[:, 0, :, :].unsqueeze(1)
+        psf = input[:, 1, :, :].unsqueeze(1)
 
-    def forward(self, input):
-        im = input[:, 0:1]
-        psf = input[:, 1 : 1 + 1]
+        im = self.eq(im)
+        psf = self.encode(psf)
 
-        feat = self.eq(im)
-        feat = torch.flatten(feat, start_dim=1)
+        im = torch.nn.Flatten()(im)
 
-        with torch.no_grad():
-            psf_latent = self.encode(psf)
+        features = torch.cat((im, psf), dim=1)
 
-        e_base = self.base_head(feat)
-        delta_e = self.psf_head(feat, psf_latent)
+        out = self.fully_net(features)
 
-        e_pred = e_base + delta_e
-        return e_pred, e_base, delta_e
+        return out

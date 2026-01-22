@@ -287,27 +287,3 @@ def predict(
         np.concatenate(targets),
         np.concatenate(images).squeeze(),
     )
-
-
-# %%
-class TupleSmoothL1WithBias(torch.nn.Module):
-    def __init__(self, beta=0.05, lambda_bias=0.0):
-        super().__init__()
-        self.beta = beta
-        self.lambda_bias = lambda_bias
-
-    def forward(self, output, target):
-        if isinstance(output, (tuple, list)):
-            e_pred = output[0]
-        else:
-            e_pred = output
-
-        err = e_pred - target
-
-        scatter = torch.nn.functional.smooth_l1_loss(e_pred, target, beta=self.beta)
-
-        if self.lambda_bias > 0:
-            bias = err.mean(dim=0).pow(2).sum()
-            return scatter + self.lambda_bias * bias
-        else:
-            return scatter

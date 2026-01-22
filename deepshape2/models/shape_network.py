@@ -12,6 +12,17 @@ __all__ = ["shapenet", "shapenet_full"]
 # %% Equivariant Block for feature extraction from images
 
 
+class MinMaxNorm(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        # x: (B, C, H, W)
+        x_min = x.amin(dim=(2, 3), keepdim=True)
+        x_max = x.amax(dim=(2, 3), keepdim=True)
+        return (x - x_min) / (x_max - x_min)
+
+
 class eq_block(torch.nn.Module):
     def __init__(self):
         super().__init__()
@@ -65,8 +76,12 @@ class eq_block(torch.nn.Module):
             out_type, output_invariant_type, kernel_size=1, bias=False
         )
 
-    def forward(self, input: torch.Tensor):
-        x = self.input_type(input)
+        self.norm = MinMaxNorm()
+
+    def forward(self, image: torch.Tensor):
+        image = self.norm(image)
+
+        x = self.input_type(image)
         x = self.mask(x)
 
         x = self.block1(x)
@@ -111,40 +126,46 @@ class shapenet(torch.nn.Module):
 # %% Full Model with PSF encoding
 
 
-class PSFResidualHead(torch.nn.Module):
-    def __init__(self, feat_dim, psf_dim, hidden_dim=128):
+class FullNet(torch.nn.Module):
+    def __init__(self, eq_dim, psf_dim):
         super().__init__()
 
-        self.psf_gate = torch.nn.Sequential(
-            torch.nn.Linear(psf_dim, hidden_dim),
+        self.eq_proj = torch.nn.Sequential(
+            torch.nn.Linear(eq_dim, eq_dim // 32),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_dim, feat_dim),
-            torch.nn.Sigmoid(),
         )
 
-        self.delta_head = torch.nn.Sequential(
-            torch.nn.Linear(feat_dim, hidden_dim),
+        self.psf_proj = torch.nn.Sequential(
+            torch.nn.Linear(psf_dim, psf_dim // 32),
             torch.nn.ReLU(),
-            torch.nn.Linear(hidden_dim, 2),
         )
 
-    def forward(self, feat, psf_latent):
-        gate = self.psf_gate(psf_latent)
-        feat_mod = feat * gate
-        delta_e = self.delta_head(feat_mod)
-        return delta_e
+        self.head = torch.nn.Sequential(
+            torch.nn.Linear(eq_dim // 32 + psf_dim // 32, 32),
+            torch.nn.ReLU(),
+            torch.nn.Linear(32, 8),
+            torch.nn.ReLU(),
+            torch.nn.Linear(8, 2),
+            torch.nn.Tanh(),
+        )
+
+    def forward(self, eq_feat, psf_feat):
+        eq_h = self.eq_proj(eq_feat)
+        psf_h = self.psf_proj(psf_feat)
+        x = torch.cat([eq_h, psf_h], dim=1)
+        return self.head(x)
 
 
 class shapenet_full(torch.nn.Module):
     def __init__(
         self,
-        eq_block=eq_block(),
+        eq_block=eq_block,
         encoder_path=MODEL_DIR + "autoencoder_jit.pt",
         eq_path=MODEL_DIR + "eq_block.pt",
     ):
         super().__init__()
 
-        self.eq = eq_block
+        self.eq = eq_block()
 
         if eq_path is not None:
             self.eq.load_state_dict(torch.load(eq_path, map_location="cpu"))
@@ -160,26 +181,37 @@ class shapenet_full(torch.nn.Module):
         self.psf_latent_dim = 1152
 
         # Fully Connected classifier
-        self.fully_net = torch.nn.Sequential(
-            torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
-            torch.nn.ReLU(),
-            torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
-            torch.nn.ReLU(),
-            torch.nn.Linear(4, 2),
-            torch.nn.Tanh(),
-        )
+        self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
+
+        # # Fully Connected classifier
+        # self.fully_net = torch.nn.Sequential(
+        #     torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
+        #     torch.nn.ReLU(),
+        #     torch.nn.Linear(4, 2),
+        #     torch.nn.Tanh(),
+        # )
+
+        self.flatten = torch.nn.Flatten()
+        self.norm = MinMaxNorm()
 
     def forward(self, input: torch.Tensor):
         im = input[:, 0, :, :].unsqueeze(1)
         psf = input[:, 1, :, :].unsqueeze(1)
 
-        im = self.eq(im)
-        psf = self.encode(psf)
+        im = self.norm(im)
+        psf = self.norm(psf)
 
-        im = torch.nn.Flatten()(im)
+        with torch.no_grad():
+            psf_coded = self.encode(psf)
 
-        features = torch.cat((im, psf), dim=1)
+        im_feat = self.eq(im)
+        im_feat = self.flatten(im_feat)
 
-        out = self.fully_net(features)
+        out = self.fully_net(im_feat, psf_coded)
+        # features = torch.cat((im, psf), dim=1)
+
+        # out = self.fully_net(features)
 
         return out

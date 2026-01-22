@@ -263,7 +263,7 @@ class DenoiseDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
 
 
 # %% Shape Measurement Loader
-class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
+class ShapeDataset(Dataset):
     def __init__(
         self,
         path,
@@ -272,111 +272,70 @@ class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
         metric_name=None,
         metric_threshold=20,
     ):
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"HDF5 file not found: {path}")
-
         self.path = path
         self.keys = [keys] if isinstance(keys, str) else keys
-        self.groups = []
-        self.group_sizes = []
-        self.valid_indices = []
-        self.labels_per_group = []
-
         self.metric_name = metric_name
         self.metric_threshold = metric_threshold
 
+        self.samples = []  # list of (group_name, local_idx)
+        self.labels = []  # aligned labels
+
         with h5py.File(self.path, "r") as hf:
-            available = list(hf.keys())
-            self.groups = groups if groups is not None else available
+            all_groups = groups if groups is not None else list(hf.keys())
 
-            for g in self.groups:
+            for g in all_groups:
                 group = hf[g]
-                total = len(group[self.keys[0]])
 
-                # -------------------------
-                # Metric based filtering
-                # -------------------------
                 if metric_name is not None:
-                    if metric_name not in group:
-                        raise KeyError(
-                            f"Metric '{metric_name}' not found in group '{g}'"
-                        )
-
                     metric_vals = group[metric_name][:]
-                    valid_idx = np.where(metric_vals > metric_threshold)[0]
+                    valid = np.where(metric_vals > metric_threshold)[0]
                 else:
-                    valid_idx = np.arange(total)
+                    valid = np.arange(len(group[self.keys[0]]))
 
-                self.valid_indices.append(valid_idx)
-                self.group_sizes.append(len(valid_idx))
+                # restore locality
+                valid = np.sort(valid)
 
-                # -------------------------
-                # Labels (apply flux mask first)
-                # -------------------------
                 df = group["patch_df"][()]
                 flux_mask = df["flux_mask"]
-
                 labels = np.stack(
                     [df["e1"][flux_mask], df["e2"][flux_mask]],
                     axis=1,
                 )
 
-                # metric + keys are full length, labels are flux-masked
-                self.labels_per_group.append(labels[valid_idx])
+                for i, local_idx in enumerate(valid):
+                    self.samples.append((g, local_idx))
+                    self.labels.append(labels[i])
 
-        self.cumulative_sizes = np.cumsum(self.group_sizes).tolist()
+        self.labels = torch.from_numpy(np.asarray(self.labels)).float()
         self._hf = None
 
-    @staticmethod
-    def _normalize(img):
-        img_min = img.min()
-        rng = img.max() - img_min
-        return (img - img_min) / rng if rng > 0 else img
+    def __len__(self):
+        return len(self.samples)
+
+    def _get_h5(self):
+        if self._hf is None:
+            self._hf = h5py.File(self.path, "r")
+        return self._hf
 
     def __getitem__(self, idx):
         hf = self._get_h5()
+        g, local_idx = self.samples[idx]
 
-        if isinstance(idx, (slice, list, tuple, np.ndarray)):
-            return (
-                [self[int(i)] for i in range(*idx.indices(len(self)))]
-                if isinstance(idx, slice)
-                else [self[int(i)] for i in idx]
-            )
+        imgs = [np.asarray(hf[g][k][local_idx], dtype=np.float32) for k in self.keys]
 
-        if torch.is_tensor(idx):
-            idx = idx.item() if idx.dim() == 0 else idx.tolist()
-            return (
-                [self[int(i)] for i in idx] if isinstance(idx, list) else self[int(idx)]
-            )
-
-        # -------------------------
-        # Correct index resolution
-        # -------------------------
-        group_idx, local_pos = self._locate(idx, apply_valid_indices=False)
-        local_idx = self.valid_indices[group_idx][local_pos]
-        group = hf[self.groups[group_idx]]
-
-        # -------------------------
-        # Load images
-        # -------------------------
-        imgs = [
-            self._normalize(np.array(group[k][local_idx], dtype=np.float32))
-            for k in self.keys
-        ]
         img = torch.from_numpy(np.stack(imgs, axis=0))
 
         if img.shape[-1] > 128 or img.shape[-2] > 128:
             img = crop_128(img)
 
-        # -------------------------
-        # Labels
-        # -------------------------
-        y = torch.from_numpy(self.labels_per_group[group_idx][local_pos]).float()
-
-        return img, y
+        return img.contiguous(), self.labels[idx]
 
     def __del__(self):
-        self._cleanup_h5()
+        try:
+            if self._hf is not None:
+                self._hf.close()
+        except Exception:
+            pass
 
 
 # %%

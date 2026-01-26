@@ -12,7 +12,6 @@ from deepshape2.reconstruction import get_facets, reconstruct_facets
 from deepshape2.simulation import simulate_visibilities
 from deepshape2.utils import (
     blendedness,
-    extract_image,
     get_freest_gpu,
     load_config,
     load_h5,
@@ -122,6 +121,7 @@ if __name__ == "__main__":
                 create_dirty=False,
                 threads=60,
             )
+            post_step("simulating visibilities", start)
 
             mask = patch_df["flux_mask"]
             galaxy_locations = patch_df[["pix_x", "pix_y"]][mask]
@@ -133,22 +133,22 @@ if __name__ == "__main__":
                 client=client,
             )
 
-            isolated = extract_image(patch_group["isolated_stamps"][:], NPIX=128)
-            blended = extract_image(patch_group["blended_stamps"][:], NPIX=128)
+            # isolated = extract_image(patch_group["isolated_stamps"][:], NPIX=128)
+            # blended = extract_image(patch_group["blended_stamps"][:], NPIX=128)
 
-            shapes = np.stack(
-                [patch_df["e1"][mask], patch_df["e2"][mask]],
-                axis=1,
-            ).astype(np.float32)
+            # shapes = np.stack(
+            #     [patch_df["e1"][mask], patch_df["e2"][mask]],
+            #     axis=1,
+            # ).astype(np.float32)
 
-            futures = [
-                client.submit(
-                    compute_blend_and_peak, isolated[i], blended[i], psf_all[i]
-                )
-                for i in range(len(isolated))
-            ]
-            results = client.gather(futures)
-            blend_vals, peak_vals = map(np.array, zip(*results))
+            # futures = [
+            #     client.submit(
+            #         compute_blend_and_peak, isolated[i], blended[i], psf_all[i]
+            #     )
+            #     for i in range(len(isolated))
+            # ]
+            # results = client.gather(futures)
+            # blend_vals, peak_vals = map(np.array, zip(*results))
 
             n_new = dirty_all.shape[0]
             new_total = total + n_new
@@ -161,9 +161,9 @@ if __name__ == "__main__":
 
             dirty_ds[total:new_total] = dirty_all.astype(np.float32)
             psf_ds[total:new_total] = psf_all.astype(np.float32)
-            shape_ds[total:new_total] = shapes
-            blend_ds[total:new_total] = blend_vals
-            peak_ds[total:new_total] = peak_vals
+            # shape_ds[total:new_total] = shapes
+            # blend_ds[total:new_total] = blend_vals
+            # peak_ds[total:new_total] = peak_vals
 
             total = new_total
             hf_out.flush()

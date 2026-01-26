@@ -1,88 +1,116 @@
 import argparse
 import time
+import warnings
 
 import numpy as np
 import torch
 from dask.distributed import Client, LocalCluster
+from numpy.fft import ifftshift, irfftn, rfftn
 
 from deepshape2.models import VAE
 from deepshape2.reconstruction import get_facets, reconstruct_facets
 from deepshape2.simulation import simulate_visibilities
 from deepshape2.utils import (
+    blendedness,
     extract_image,
     get_freest_gpu,
     load_config,
     load_h5,
     post_step,
-    psnr_batch,
 )
+
+warnings.filterwarnings("ignore", category=UserWarning)
+
+# --------------------------------------------------
+# Config
+# --------------------------------------------------
+cfg = load_config()
+DATA_DIR = cfg["DATA_DIR"]
+
+TRAIN_PATH = DATA_DIR + "trainingset2.h5"
+
+
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+def get_or_create(hf, name, shape, maxshape, dtype, chunks):
+    if name in hf:
+        return hf[name]
+    return hf.create_dataset(
+        name,
+        shape=shape,
+        maxshape=maxshape,
+        dtype=dtype,
+        compression="gzip",
+        chunks=chunks,
+    )
+
+
+def compute_blend_and_peak(iso, blend, psf):
+    blend_val = blendedness(iso[None], blend[None])[0]
+    img_f = rfftn(iso)
+    psf_f = rfftn(ifftshift(psf))
+    dirty = irfftn(img_f * psf_f, s=iso.shape)
+    return np.float32(blend_val), np.float32(dirty.max())
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Facet generation and reconstruction")
+    parser = argparse.ArgumentParser()
     parser.add_argument(
         "-m",
         "--mode",
         choices=["facets", "reconstruct"],
         required=True,
-        default="reconstruct",
-        help="Run only facet extraction or only reconstruction",
     )
     return parser.parse_args()
 
 
+# --------------------------------------------------
+# Main
+# --------------------------------------------------
 if __name__ == "__main__":
     args = parse_args()
     start = time.time()
 
-    cfg = load_config()
-    DATA_DIR = cfg["DATA_DIR"]
-    hf_path = DATA_DIR + "wide_set.h5"
-
     patches = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
-    data = load_h5(hf_path, "a", delete_if_exists=False)
+    hf_inp = load_h5(DATA_DIR + "wide_set.h5", "r", delete_if_exists=False)
+    hf_out = load_h5(TRAIN_PATH, "a", delete_if_exists=False)
 
-    # -----------------------------
-    # --- GPU setup (only if reconstructing)
-    # -----------------------------
-    if args.mode == "reconstruct":
-        device = get_freest_gpu(set_device=True)
+    # --------------------------------------------------
+    # Create / load datasets
+    # --------------------------------------------------
+    dirty_ds = get_or_create(
+        hf_out, "dirty", (0, 128, 128), (None, 128, 128), np.float32, (1000, 128, 128)
+    )
+    psf_ds = get_or_create(
+        hf_out, "psf", (0, 128, 128), (None, 128, 128), np.float32, (1000, 128, 128)
+    )
+    shape_ds = get_or_create(hf_out, "shapes", (0, 2), (None, 2), np.float32, (1000, 2))
+    blend_ds = get_or_create(hf_out, "blendedness", (0,), (None,), np.float32, (1000,))
+    peak_ds = get_or_create(hf_out, "peaks", (0,), (None,), np.float32, (1000,))
+    recon_ds = get_or_create(
+        hf_out, "recon", (0, 128, 128), (None, 128, 128), np.float32, (1000, 128, 128)
+    )
 
-        ckpt_path = cfg["MODEL_DIR"] + "vae_mha.pt"
-        deblender = VAE().to(device)
-        deblender.load_state_dict(
-            torch.load(ckpt_path, map_location=device)["best_weights"]
-        )
-        deblender.eval()
-
-    # -----------------------------
-    # --- Dask cluster (only for facets)
-    # -----------------------------
-    dask_ctx = (
-        LocalCluster(
+    # --------------------------------------------------
+    # FACETS MODE
+    # --------------------------------------------------
+    if args.mode == "facets":
+        dask_ctx = LocalCluster(
             n_workers=64,
             processes=True,
             threads_per_worker=1,
-            scheduler_port=8786,
             memory_limit=0,
         )
-        if args.mode == "facets"
-        else None
-    )
+        client = Client(dask_ctx)
+        print("Dask dashboard:", client.dashboard_link)
 
-    client_ctx = Client(dask_ctx) if dask_ctx else None
+        total = dirty_ds.shape[0]
 
-    if client_ctx:
-        print("Dask dashboard:", client_ctx.dashboard_link)
+        for patch_name in patches:
+            patch_group = hf_inp[patch_name]
+            post_step(f"processing {patch_name}", start)
 
-    # -----------------------------
-    # --- Process patches
-    # -----------------------------
-    for patch_name in patches:
-        patch_group = data[patch_name]
-        post_step(f"opening {patch_name}", start, data=data)
-
-        if args.mode == "facets":
             patch_df = patch_group["patch_df"][()]
             patch_sky = patch_group["sky"][()]
             patch_ra, patch_dec = patch_group.attrs["centre"]
@@ -102,60 +130,84 @@ if __name__ == "__main__":
                 vis=vis,
                 galaxy_locations=galaxy_locations,
                 NPIX_facet=128,
-                client=client_ctx,
+                client=client,
             )
 
-            patch_group.create_dataset(
-                "dirty", data=dirty_all, compression="gzip", chunks=(1, 128, 128)
-            )
-            patch_group.create_dataset(
-                "psf", data=psf_all, compression="gzip", chunks=(1, 128, 128)
-            )
+            isolated = extract_image(patch_group["isolated_stamps"][:], NPIX=128)
+            blended = extract_image(patch_group["blended_stamps"][:], NPIX=128)
 
-            post_step(f"saved dirty/psf facets {dirty_all.shape}", start, data=data)
+            shapes = np.stack(
+                [patch_df["e1"][mask], patch_df["e2"][mask]],
+                axis=1,
+            ).astype(np.float32)
 
-        elif args.mode == "reconstruct":
-            dirty_all = patch_group["dirty"][:]
-            psf_all = patch_group["psf"][:]
+            futures = [
+                client.submit(
+                    compute_blend_and_peak, isolated[i], blended[i], psf_all[i]
+                )
+                for i in range(len(isolated))
+            ]
+            results = client.gather(futures)
+            blend_vals, peak_vals = map(np.array, zip(*results))
 
-            result = reconstruct_facets(
-                dirty_all,
-                psf_all,
-                device=device,
-                num_workers=4,
-                deblender=deblender,
-            )
+            n_new = dirty_all.shape[0]
+            new_total = total + n_new
 
-            recon = result["recon"]
-            decon = result["decon"]
+            dirty_ds.resize((new_total, 128, 128))
+            psf_ds.resize((new_total, 128, 128))
+            shape_ds.resize((new_total, 2))
+            blend_ds.resize((new_total,))
+            peak_ds.resize((new_total,))
 
-            patch_group.create_dataset(
-                "recon", data=recon, compression="gzip", chunks=(1, 128, 128)
-            )
-            patch_group.create_dataset(
-                "decon", data=decon, compression="gzip", chunks=(1, 128, 128)
-            )
+            dirty_ds[total:new_total] = dirty_all.astype(np.float32)
+            psf_ds[total:new_total] = psf_all.astype(np.float32)
+            shape_ds[total:new_total] = shapes
+            blend_ds[total:new_total] = blend_vals
+            peak_ds[total:new_total] = peak_vals
 
-            iso = extract_image(patch_group["isolated_stamps"][:], NPIX=128)
-            psnr_vals = psnr_batch(iso, recon)
+            total = new_total
+            hf_out.flush()
 
-            patch_group.create_dataset("psnr", data=psnr_vals, compression="gzip")
+            post_step(f"saved {n_new} facets", start)
 
-            print(
-                f"{patch_name} PSNR "
-                f"min {np.nanmin(psnr_vals):.2f} | "
-                f"median {np.nanmedian(psnr_vals):.2f} | "
-                f"max {np.nanmax(psnr_vals):.2f}"
-            )
-
-            post_step(f"reconstructed facets {recon.shape}", start, data=data)
-
-    # -----------------------------
-    # --- Cleanup
-    # -----------------------------
-    if client_ctx:
-        client_ctx.close()
+        client.close()
         dask_ctx.close()
 
-    data.close()
-    post_step(f"finished {len(patches)} patches", start)
+    # --------------------------------------------------
+    # RECONSTRUCT MODE
+    # --------------------------------------------------
+    elif args.mode == "reconstruct":
+        device = get_freest_gpu(set_device=True)
+
+        ckpt_path = cfg["MODEL_DIR"] + "vae_mha.pt"
+        deblender = VAE().to(device)
+        deblender.load_state_dict(
+            torch.load(ckpt_path, map_location=device)["best_weights"]
+        )
+        deblender.eval()
+
+        dirty_all = dirty_ds[:]
+        psf_all = psf_ds[:]
+
+        post_step(f"reconstructing {dirty_all.shape[0]} facets", start)
+
+        result = reconstruct_facets(
+            dirty_all,
+            psf_all,
+            device=device,
+            num_workers=4,
+            deblender=deblender,
+        )
+
+        recon = result["recon"].astype(np.float32)
+
+        n_new = recon.shape[0]
+        recon_ds.resize((n_new, 128, 128))
+        recon_ds[:] = recon
+
+        hf_out.flush()
+        post_step("finished reconstruction", start)
+
+    hf_inp.close()
+    hf_out.close()
+    post_step("all done", start)

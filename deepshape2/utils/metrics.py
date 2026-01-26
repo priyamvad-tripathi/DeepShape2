@@ -90,34 +90,54 @@ def psnr_torch(true_images: torch.Tensor, recon_images: torch.Tensor):
 
 
 # %% Quality Metrics for Blended Images
+# def blendedness(true_images, blended_images):
+#     true_images = np.asarray(true_images, dtype=float)
+#     blended_images = np.asarray(blended_images, dtype=float)
+
+#     if true_images.shape != blended_images.shape:
+#         raise ValueError("Input arrays must have the same shape.")
+
+#     # Ensure 3D: (batch, H, W)
+#     if true_images.ndim != 3:
+#         true_images = true_images[None, ...]
+#         blended_images = blended_images[None, ...]
+
+#     batch_size = true_images.shape[0]
+#     result = np.zeros(batch_size, dtype=float)
+
+#     for i in range(batch_size):
+#         t = true_images[i]
+#         b = blended_images[i]
+
+#         # Mask of valid pixels (both arrays not NaN)
+#         mask = np.isfinite(t) & np.isfinite(b)
+
+#         num = np.sum(t[mask] * t[mask])
+#         denom = np.sum(b[mask] * t[mask])
+
+#         result[i] = 1 - num / denom if denom != 0 else np.nan
+
+#     return result
+
+
 def blendedness(true_images, blended_images):
-    true_images = np.asarray(true_images, dtype=float)
-    blended_images = np.asarray(blended_images, dtype=float)
+    true_images = np.asarray(true_images, dtype=np.float32)
+    blended_images = np.asarray(blended_images, dtype=np.float32)
 
     if true_images.shape != blended_images.shape:
         raise ValueError("Input arrays must have the same shape.")
 
-    # Ensure 3D: (batch, H, W)
     if true_images.ndim != 3:
         true_images = true_images[None, ...]
         blended_images = blended_images[None, ...]
 
-    batch_size = true_images.shape[0]
-    result = np.zeros(batch_size, dtype=float)
+    mask = np.isfinite(true_images) & np.isfinite(blended_images)
 
-    for i in range(batch_size):
-        t = true_images[i]
-        b = blended_images[i]
+    num = np.sum(true_images * true_images * mask, axis=(1, 2))
+    denom = np.sum(blended_images * true_images * mask, axis=(1, 2))
 
-        # Mask of valid pixels (both arrays not NaN)
-        mask = np.isfinite(t) & np.isfinite(b)
-
-        num = np.sum(t[mask] * t[mask])
-        denom = np.sum(b[mask] * t[mask])
-
-        result[i] = 1 - num / denom if denom != 0 else np.nan
-
-    return result
+    # safe divide
+    return np.where(denom != 0, 1 - num / denom, np.nan).astype(np.float32)
 
 
 def contamination(true_images, blended_images):

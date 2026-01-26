@@ -183,7 +183,7 @@ class shapenet_full(torch.nn.Module):
         # Fully Connected classifier
         self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
 
-        # # Fully Connected classifier
+        # Fully Connected classifier
         # self.fully_net = torch.nn.Sequential(
         #     torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
         #     torch.nn.ReLU(),
@@ -194,14 +194,14 @@ class shapenet_full(torch.nn.Module):
         # )
 
         self.flatten = torch.nn.Flatten()
-        self.norm = MinMaxNorm()
+        # self.norm = MinMaxNorm()
 
     def forward(self, input: torch.Tensor):
         im = input[:, 0, :, :].unsqueeze(1)
         psf = input[:, 1, :, :].unsqueeze(1)
 
-        im = self.norm(im)
-        psf = self.norm(psf)
+        # im = self.norm(im)
+        # psf = self.norm(psf)
 
         with torch.no_grad():
             psf_coded = self.encode(psf)
@@ -210,8 +210,8 @@ class shapenet_full(torch.nn.Module):
         im_feat = self.flatten(im_feat)
 
         out = self.fully_net(im_feat, psf_coded)
-        # features = torch.cat((im, psf), dim=1)
 
+        # features = torch.cat((im_feat, psf_coded), dim=1)
         # out = self.fully_net(features)
 
         return out

@@ -1,188 +1,142 @@
 # %%
-import argparse
-import os
 import time
 
 import h5py
 import numpy as np
+from numpy.fft import ifftshift, irfftn, rfftn
 
-from deepshape2.utils import load_config, time_string
+from deepshape2.utils import blendedness, extract_image, load_config, time_string
+
+# %% Config Parameters
+
 
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 
-# %% Load Config
+INP_PATH = DATA_DIR + "wide_set.h5"
+OUT_PATH = DATA_DIR + "trainset.h5"
 
-parser = argparse.ArgumentParser()
-parser.add_argument(
-    "--h5_path",
-    type=str,
-    default=DATA_DIR + "wide_set.h5",
-    help="Path to the HDF5 dataset file.",
-)
+all_groups = group_names = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
+# %% Main Function
 
-parser.add_argument(
-    "--out_dir",
-    "-o",
-    type=str,
-    default=None,
-    help="Directory to save the curated dataset.",
-)
+start = time.time()
 
-parser.add_argument(
-    "--groups",
-    "-g",
-    nargs="+",
-    type=str,
-    default=[f"patch_{nl + 1:03d}" for nl in range(71, 100)],
-    help="List of group names to include",
-)
-parser.add_argument(
-    "--keys",
-    "-k",
-    nargs="+",
-    default=["recon", "psf"],
-    help="List of dataset keys to include.",
-)
-parser.add_argument(
-    "--metric_name",
-    "-m",
-    type=str,
-    default="psnr",
-    help="Name of the metric dataset to use for filtering.",
-)
+images = []
+shape_all = []
+peaks = []
+blend_all = []
 
 
-parser.add_argument(
-    "--no_thresholding",
-    "-ntr",
-    action="store_true",
-    help="Skip thresholding",
-)
-
-parser.add_argument(
-    "--metric_threshold",
-    "-t",
-    type=float,
-    default=25,
-    help="Threshold value for the metric to filter images.",
-)
-
-
-def build_train_dataset(
-    h5_path,
-    keys,
-    groups,
-    metric_name,
-    metric_threshold,
-    out_dir,
-    disable_thresholding=False,
+with (
+    h5py.File(INP_PATH, "r") as hf_in,
+    h5py.File(OUT_PATH, "a") as hf_out,
 ):
-    start = time.time()
-    keys = [keys] if isinstance(keys, str) else keys
-
-    if out_dir is None:
-        out_dir = DATA_DIR + f"trainset_psnr_{metric_threshold}"
-    else:
-        out_dir = DATA_DIR + out_dir
-
-    os.makedirs(out_dir, exist_ok=True)
-
-    imgs_list = []
-    labels_list = []
-    group_names = []
-    group_offsets = []
-
-    offset = 0
-
-    if disable_thresholding:
-        print("Thresholding disabled. Including all images.")
-
-    with h5py.File(h5_path, "r") as hf:
-        all_groups = groups if groups is not None else list(hf.keys())
-
-        for g in all_groups:
-            group = hf[g]
-
-            # --------------------------------------------------
-            # 1) Flux mask (catalog space)
-            # --------------------------------------------------
-            df = group["patch_df"][()]
-            flux_mask = df["flux_mask"]
-            cat_after_flux = np.where(flux_mask)[0]
-
-            # --------------------------------------------------
-            # 2) PSNR mask (image space)
-            # --------------------------------------------------
-            if not disable_thresholding:
-                psnr_vals = group[metric_name][:]
-                valid_img_idx = np.where(psnr_vals > metric_threshold)[0]
-            else:
-                valid_img_idx = np.arange(len(cat_after_flux))
-
-            if len(valid_img_idx) == 0:
-                continue
-
-            valid_cat_idx = cat_after_flux[valid_img_idx]
-
-            # --------------------------------------------------
-            # 3) Load images
-            # --------------------------------------------------
-            group_imgs = np.stack(
-                [group[k][valid_img_idx].astype(np.float32) for k in keys],
-                axis=1,
-            )
-
-            # --------------------------------------------------
-            # 4) Load labels
-            # --------------------------------------------------
-            e1 = df["e1"][valid_cat_idx]
-            e2 = df["e2"][valid_cat_idx]
-            group_labels = np.stack([e1, e2], axis=1).astype(np.float32)
-
-            imgs_list.append(group_imgs)
-            labels_list.append(group_labels)
-
-            group_names.append(g)
-            group_offsets.append((offset, offset + len(valid_img_idx)))
-            offset += len(valid_img_idx)
-
-            print(
-                f"Finished processing group: {g} | "
-                f"Time elapsed: {time_string(time.time() - start)}"
-            )
-
-    # --------------------------------------------------
-    # Concatenate once (offline cost)
-    # --------------------------------------------------
-    imgs = np.concatenate(imgs_list, axis=0)
-    labels = np.concatenate(labels_list, axis=0)
-
-    # --------------------------------------------------
-    # Save as .npy (memory-mappable)
-    # --------------------------------------------------
-    np.save(os.path.join(out_dir, "imgs.npy"), imgs)
-    np.save(os.path.join(out_dir, "labels.npy"), labels)
-    np.save(
-        os.path.join(out_dir, "group_offsets.npy"),
-        np.asarray(group_offsets, dtype=np.int64),
+    # Create empty datasets with maxshape to allow resizing
+    img_ds = hf_out.create_dataset(
+        "images",
+        shape=(0, 2, 128, 128),
+        maxshape=(None, 2, 128, 128),
+        dtype=np.float32,
+        compression="gzip",
+        chunks=(1000, 2, 128, 128),
     )
-    np.save(os.path.join(out_dir, "group_names.npy"), np.asarray(group_names))
 
-    print(f"Saved curated dataset to {out_dir}")
-    print(f"Total samples: {len(imgs)}")
-    print(f"Total time: {time_string(time.time() - start)}")
-
-
-if __name__ == "__main__":
-    args = parser.parse_args()
-
-    build_train_dataset(
-        h5_path=args.h5_path,
-        keys=args.keys,
-        groups=args.groups,
-        metric_name=args.metric_name,
-        metric_threshold=args.metric_threshold,
-        out_dir=args.out_dir,
-        disable_thresholding=args.no_thresholding,
+    shape_ds = hf_out.create_dataset(
+        "shapes",
+        shape=(0, 2),
+        maxshape=(None, 2),
+        dtype=np.float32,
+        compression="gzip",
+        chunks=(1000, 2),
     )
+
+    blend_ds = hf_out.create_dataset(
+        "blendedness",
+        shape=(0,),
+        maxshape=(None,),
+        dtype=np.float32,
+        compression="gzip",
+    )
+
+    peak_ds = hf_out.create_dataset(
+        "peaks",
+        shape=(0,),
+        maxshape=(None,),
+        dtype=np.float32,
+        compression="gzip",
+    )
+
+    total = 0
+
+    for group_name in all_groups:
+        group = hf_in[group_name]
+
+        print(
+            f"Processing group: {group_name} | Time elapsed: {time_string(time.time() - start)}"
+        )
+
+        # 1) Shapes
+        df = group["patch_df"][()]
+        flux_mask = df["flux_mask"]
+        shape = np.stack([df["e1"][flux_mask], df["e2"][flux_mask]], axis=1).astype(
+            np.float32
+        )
+
+        # 2) Images
+        recon = group["recon"][:]
+        psf = group["psf"][:]
+        image = np.stack([recon, psf], axis=1).astype(np.float32)
+
+        img_min = image.min(axis=(2, 3), keepdims=True)
+        img_max = image.max(axis=(2, 3), keepdims=True)
+        image = (image - img_min) / (img_max - img_min)
+
+        assert image.shape[0] == shape.shape[0]
+
+        # 3) Blendedness
+        isolated_stamps = extract_image(group["isolated_stamps"][:])
+        blended_stamps = extract_image(group["blended_stamps"][:])
+        blend = blendedness(isolated_stamps, blended_stamps).astype(np.float32)
+
+        assert blend.shape[0] == shape.shape[0]
+
+        # 4) Peaks
+        psfs = group["psf"][:]
+        img_f = rfftn(isolated_stamps, axes=(1, 2))
+        psf_f = rfftn(ifftshift(psfs, axes=(1, 2)), axes=(1, 2))
+        dirty = irfftn(img_f * psf_f, s=isolated_stamps.shape[1:], axes=(1, 2))
+        peak_vals = dirty.max(axis=(1, 2)).astype(np.float32)
+
+        print(f"Max peak value: {peak_vals.max() * 1e6: .02f}")
+        print(f"Min peak value: {peak_vals.min() * 1e6: .02f}")
+        print(f"Mean peak value: {peak_vals.mean() * 1e6: .02f}")
+        print(
+            "Finished getting peak values | Time elapsed:",
+            time_string(time.time() - start),
+        )
+        print("--------------------------------------------------")
+
+        # Append to output datasets
+        n_new = image.shape[0]
+        new_total = total + n_new
+
+        img_ds.resize((new_total, 2, 128, 128))
+        img_ds[total:new_total] = image
+
+        shape_ds.resize((new_total, 2))
+        shape_ds[total:new_total] = shape
+
+        blend_ds.resize((new_total,))
+        blend_ds[total:new_total] = blend
+
+        peak_ds.resize((new_total,))
+        peak_ds[total:new_total] = peak_vals
+
+        total = new_total
+
+        # Flush periodically for speed and safety
+        hf_out.flush()
+
+print(f"Saved training dataset to {OUT_PATH}")
+print(f"Total samples: {total}")
+print(f"Total time: {time_string(time.time() - start)}")

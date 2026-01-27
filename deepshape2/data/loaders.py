@@ -419,23 +419,32 @@ class ShapeDatasetLight(Dataset):
         return x, y
 
 
-class ShapeDatasetFast(Dataset):
-    def __init__(self, path, thresh):
-        with h5py.File(path, "r") as hf:
-            peaks = hf["peaks"][:]
-            idxs = np.where(peaks > thresh)[0]
+# class ShapeDatasetLightLMDB(Dataset):
+#     def __init__(self, lmdb_path):
+#         self.env = lmdb.open(
+#             lmdb_path,
+#             readonly=True,
+#             lock=False,
+#             readahead=False,
+#             meminit=False,
+#         )
 
-            self.images = hf["images"][idxs]
-            self.shapes = hf["shapes"][idxs]
+#         # Cache keys once
+#         with self.env.begin() as txn:
+#             self.keys = [k for k, _ in txn.cursor()]
 
-    def __len__(self):
-        return len(self.images)
+#     def __len__(self):
+#         return len(self.keys)
 
-    def __getitem__(self, idx):
-        return (
-            torch.from_numpy(self.images[idx]),
-            torch.from_numpy(self.shapes[idx]),
-        )
+#     def __getitem__(self, idx):
+#         key = self.keys[idx]
+#         with self.env.begin() as txn:
+#             sample = pickle.loads(txn.get(key))
+
+#         x = torch.from_numpy(sample["images"])
+#         y = torch.from_numpy(sample["shapes"])
+
+#         return x, y
 
 
 # %% PSF Dataloader

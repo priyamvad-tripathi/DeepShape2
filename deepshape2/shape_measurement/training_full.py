@@ -2,7 +2,7 @@
 import numpy as np
 import torch
 
-from deepshape2.data.loaders import build_fast_loaders
+from deepshape2.data.loaders import ShapeDatasetLight, dataloader
 from deepshape2.models import shapenet_full
 from deepshape2.shape_measurement.main import predict, train
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
@@ -20,10 +20,6 @@ MODEL_DIR = cfg["MODEL_DIR"]
 loc_weights = MODEL_DIR + "shape_full.pt"
 model = shapenet_full()
 
-group_names = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
-group_names_train, group_names_val = group_names[:22], group_names[22:]
-
-
 # Torch Parameters
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -31,13 +27,16 @@ set_seed()
 BSIZE = 32
 
 # %% Load Data and Model
+dataset = ShapeDatasetLight(
+    path=DATA_DIR + "trainset.h5",
+    thresh=3 * 0.71e-6,
+)
 
-train_loader, val_loader = build_fast_loaders(
-    dataset_dir=DATA_DIR + "trainset_psnr_25",
-    train_groups=group_names_train,
-    val_groups=group_names_val,
-    batch_size=BSIZE,
-    num_workers=4,
+
+train_loader, val_loader = dataloader(
+    dataset=dataset,
+    batch_size=[BSIZE, BSIZE],
+    split=(0.8, 0.2),
 )
 
 #  Load model to device
@@ -50,7 +49,7 @@ print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
 optimizer = torch.optim.Adam(
     filter(lambda p: p.requires_grad, model.parameters()),
-    lr=1e-3,
+    lr=1e-4,
     weight_decay=1e-5,
 )
 

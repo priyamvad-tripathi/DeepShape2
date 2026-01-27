@@ -12,24 +12,26 @@ from deepshape2.visualization import plot_bias, plot_losses
 cfg = load_config()
 TQDM_FLAG = cfg["TQDM"]
 
-print("TQDM enabled:", TQDM_FLAG)
-
 DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
 
-loc_weights = MODEL_DIR + "shape_full.pt"
-model = shapenet_full()
+
+BSIZE = 64
+thresh = 6
+
+loc_weights = MODEL_DIR + f"shape_full_thresh_{thresh}.pt"
+print("Weights location:", loc_weights)
+
 
 # Torch Parameters
 device = get_freest_gpu(set_device=True)
 set_seed()
 
-BSIZE = 32
 
 # %% Load Data and Model
 dataset = ShapeDatasetLight(
     path=DATA_DIR + "trainset.h5",
-    thresh=3 * 0.71e-6,
+    thresh=thresh * 0.71e-6,
 )
 
 
@@ -39,9 +41,10 @@ train_loader, val_loader = dataloader(
     split=(0.8, 0.2),
 )
 
-#  Load model to device
+#  Load model
+model = shapenet_full()
 model = model.to(device)
-print(model(torch.randn(10, 2, 128, 128).to(device)).size())
+# print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results

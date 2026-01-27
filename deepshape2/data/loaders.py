@@ -419,34 +419,6 @@ class ShapeDatasetLight(Dataset):
         return x, y
 
 
-# class ShapeDatasetLightLMDB(Dataset):
-#     def __init__(self, lmdb_path):
-#         self.env = lmdb.open(
-#             lmdb_path,
-#             readonly=True,
-#             lock=False,
-#             readahead=False,
-#             meminit=False,
-#         )
-
-#         # Cache keys once
-#         with self.env.begin() as txn:
-#             self.keys = [k for k, _ in txn.cursor()]
-
-#     def __len__(self):
-#         return len(self.keys)
-
-#     def __getitem__(self, idx):
-#         key = self.keys[idx]
-#         with self.env.begin() as txn:
-#             sample = pickle.loads(txn.get(key))
-
-#         x = torch.from_numpy(sample["images"])
-#         y = torch.from_numpy(sample["shapes"])
-
-#         return x, y
-
-
 # %% PSF Dataloader
 class ImageDataset(Dataset):
     """
@@ -571,6 +543,7 @@ def dataloader(
             num_workers=4,
             pin_memory=True,
             drop_last=True,
+            prefetch_factor=2,
         )
         val_loader = DataLoader(
             val_ds,
@@ -579,6 +552,7 @@ def dataloader(
             num_workers=4,
             pin_memory=True,
             drop_last=True,
+            prefetch_factor=2,
         )
         return train_loader, val_loader
 

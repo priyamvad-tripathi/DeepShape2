@@ -19,7 +19,7 @@ MODEL_DIR = cfg["MODEL_DIR"]
 BSIZE = 64
 thresh = 6
 
-loc_weights = MODEL_DIR + f"shape_full_thresh_{thresh}.pt"
+loc_weights = MODEL_DIR + f"shape_full_thresh_{thresh}_l1.pt"
 print("Weights location:", loc_weights)
 
 
@@ -56,7 +56,7 @@ optimizer = torch.optim.Adam(
     weight_decay=1e-5,
 )
 
-loss_fn = torch.nn.MSELoss()
+loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
 
 n_epochs = 300
 

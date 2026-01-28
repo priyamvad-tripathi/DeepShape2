@@ -21,7 +21,7 @@ BSIZE = 64
 peak_thresh = 3
 
 
-loc_weights = MODEL_DIR + f"shape_full_old_thresh_{peak_thresh}.pt"
+loc_weights = MODEL_DIR + f"shape_full_new2_thresh_{peak_thresh}.pt"
 print("Weights location:", loc_weights)
 
 
@@ -49,36 +49,43 @@ model = shapenet_full()
 model = model.to(device)
 # print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
+checkpoint = torch.load(
+    MODEL_DIR + f"shape_full_new_thresh_{peak_thresh}.pt",
+    map_location=device,
+    weights_only=False,
+)
+best_weights = checkpoint["best_weights"]
+model.load_state_dict(best_weights)
+
+
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
 
 for p in model.encode.parameters():
     p.requires_grad = False
 
-# for name, p in model.encode.named_parameters():
-#     if "14" in name:
-#         p.requires_grad = True
+for name, p in model.encode.named_parameters():
+    if "14" in name:
+        p.requires_grad = True
 
-# psf_params = [p for p in model.encode.parameters() if p.requires_grad]
+psf_params = [p for p in model.encode.parameters() if p.requires_grad]
 
-# psf_param_ids = {id(p) for p in psf_params}
+psf_param_ids = {id(p) for p in psf_params}
 
 main_params = [
-    p
-    for p in model.parameters()
-    if p.requires_grad  # and id(p) not in psf_param_ids
+    p for p in model.parameters() if p.requires_grad and id(p) not in psf_param_ids
 ]
 
 optimizer = torch.optim.Adam(
     [
-        {"params": main_params, "lr": 1e-4},
-        # {"params": psf_params, "lr": 1e-5},
+        {"params": main_params, "lr": 1e-4 * 0.5},
+        {"params": psf_params, "lr": 1e-5 * 0.5},
     ],
     weight_decay=1e-5,
 )
 
-# loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
-loss_fn = torch.nn.MSELoss()
+loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
+# loss_fn = torch.nn.MSELoss()
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,

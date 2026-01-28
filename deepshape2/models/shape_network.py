@@ -173,25 +173,23 @@ class shapenet_full(torch.nn.Module):
         autoencoder = torch.jit.load(encoder_path, map_location="cpu")
         self.encode = autoencoder.encoder
         self.encode.eval()
-        for p in self.encode.parameters():
-            p.requires_grad = False
 
         # feature dimensions
         self.eq_feat_dim = 32 * 12 * 12
         self.psf_latent_dim = 1152
 
         # Fully Connected classifier
-        self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
+        # self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
 
         # Fully Connected classifier
-        # self.fully_net = torch.nn.Sequential(
-        #     torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
-        #     torch.nn.ReLU(),
-        #     torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
-        #     torch.nn.ReLU(),
-        #     torch.nn.Linear(4, 2),
-        #     torch.nn.Tanh(),
-        # )
+        self.fully_net = torch.nn.Sequential(
+            torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
+            torch.nn.ReLU(),
+            torch.nn.Linear(4, 2),
+            torch.nn.Tanh(),
+        )
 
         self.flatten = torch.nn.Flatten()
         # self.norm = MinMaxNorm()
@@ -203,15 +201,14 @@ class shapenet_full(torch.nn.Module):
         # im = self.norm(im)
         # psf = self.norm(psf)
 
-        with torch.no_grad():
-            psf_coded = self.encode(psf)
+        psf_coded = self.encode(psf)
 
         im_feat = self.eq(im)
         im_feat = self.flatten(im_feat)
 
-        out = self.fully_net(im_feat, psf_coded)
+        # out = self.fully_net(im_feat, psf_coded)
 
-        # features = torch.cat((im_feat, psf_coded), dim=1)
-        # out = self.fully_net(features)
+        features = torch.cat((im_feat, psf_coded), dim=1)
+        out = self.fully_net(features)
 
         return out

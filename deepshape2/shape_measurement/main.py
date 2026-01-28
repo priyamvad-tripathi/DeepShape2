@@ -287,3 +287,232 @@ def predict(
         np.concatenate(targets),
         np.concatenate(images).squeeze(),
     )
+
+
+# %%
+def train2(
+    model,
+    train_loader,
+    val_loader,
+    epochs,
+    optimizer,
+    device,
+    **kwargs,
+):
+    start_time = time.time()
+    best_val_loss = np.inf
+    best_weights = None
+    current_epoch = 0
+    best_epoch = 0
+
+    train_loss_list, val_loss_list, lr_list = [], [], [np.inf]
+    val_loss_ema = None
+
+    # --- Debug stats ---
+    val_bias_list = []
+    val_scatter_list = []
+
+    # --- Config ---
+    filename = kwargs.get("filename")
+    scheduler = kwargs.get("scheduler", None)
+    save_freq = kwargs.get("save_freq", 50)
+    precision = kwargs.get("precision", 4)
+    tqdm_enabled = kwargs.get("tqdm_enabled", False)
+    loss_fn = kwargs.get("loss_fn", torch.nn.MSELoss())
+    ema_alpha = kwargs.get("ema_alpha", 0.1)
+
+    print(f"Running on device: {device}")
+
+    # --- Load checkpoint ---
+    try:
+        model, optimizer, checkpoint = load_ckp(filename, model, optimizer, device)
+        current_epoch = checkpoint["epoch"]
+        best_val_loss = checkpoint.get("best_val_loss", np.inf)
+        best_weights = checkpoint.get("best_weights")
+        val_loss_list = checkpoint.get("val_loss_list", [])
+        train_loss_list = checkpoint.get("train_loss_list", [])
+        val_loss_ema = checkpoint.get("val_loss_ema", None)
+        lr_list = checkpoint.get("lr_list", [])
+        val_bias_list = checkpoint.get("val_bias_list", [])
+        val_scatter_list = checkpoint.get("val_scatter_list", [])
+        if "scheduler_state_dict" in checkpoint:
+            scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+        print(f"Loaded checkpoint from epoch {current_epoch}")
+    except (AttributeError, FileNotFoundError, TypeError):
+        print("No saved checkpoints found. Starting from scratch.")
+
+    # --- Training loop ---
+    for epoch in range(epochs):
+        if epoch < current_epoch:
+            continue
+
+        model.train()
+        batch_losses = []
+
+        current_lr = optimizer.param_groups[0]["lr"]
+        new_lr = current_lr < lr_list[-1]
+        lr_list.append(current_lr)
+
+        if not tqdm_enabled:
+            print("-" * 50)
+            print(
+                f"Epoch {epoch + 1}/{epochs} | LR: {current_lr:.2e}"
+                + (" NEW" if new_lr else ""),
+                flush=True,
+            )
+
+        pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
+        pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
+
+        with pbar:
+            for image, target in train_loader:
+                image = image.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
+
+                optimizer.zero_grad(set_to_none=True)
+                pred = model(image)
+                loss = loss_fn(pred, target)
+
+                loss.backward()
+                optimizer.step()
+
+                with torch.no_grad():
+                    err = (pred - target).abs()
+
+                grad_norm = (
+                    list(model.encode.named_parameters())[12][1].grad.norm().item()
+                )
+
+                batch_losses.append(loss.detach().cpu())
+
+                postfix = {
+                    "Train": f"{torch.stack(batch_losses).mean():.{precision}e}",
+                    "LR": (
+                        f"{Color.RED}{current_lr:.3e}{Color.OFF}"
+                        if new_lr
+                        else f"{current_lr:.3e}"
+                    ),
+                }
+
+                pbar.update(1)
+                pbar.set_postfix(postfix)
+
+        epoch_loss = torch.stack(batch_losses).mean().item()
+        train_loss_list.append(epoch_loss)
+
+        line = f"Train Loss: {epoch_loss:.{precision}e}"
+        line += f" | Grad Norm: {grad_norm:.3e}"
+        line += f" | Frac < beta: {(err < 0.05).float().mean().item():.3e}"
+
+        # --- Validation ---
+        if val_loader:
+            model.eval()
+            val_losses = []
+            residuals = []
+
+            with torch.no_grad():
+                for image, target in val_loader:
+                    image = image.to(device, non_blocking=True)
+                    target = target.to(device, non_blocking=True)
+
+                    pred = model(image)
+                    val_losses.append(loss_fn(pred, target).detach().cpu())
+                    residuals.append((pred - target).detach().cpu())
+
+            val_loss_raw = torch.stack(val_losses).mean().item()
+            residuals = torch.cat(residuals, dim=0)
+
+            val_bias = residuals.mean(dim=0).norm().item()
+            val_scatter = residuals.std(dim=0).mean().item()
+
+            val_bias_list.append(val_bias)
+            val_scatter_list.append(val_scatter)
+
+            # --- Scheduler uses RAW val loss ---
+            if scheduler is not None:
+                scheduler.step(val_loss_raw)
+
+            # --- EMA only for logging / best model ---
+            if val_loss_ema is None:
+                val_loss_ema = val_loss_raw
+            else:
+                val_loss_ema = (1 - ema_alpha) * val_loss_ema + ema_alpha * val_loss_raw
+
+            val_loss_list.append(val_loss_ema)
+
+            is_best = val_loss_ema < best_val_loss
+            if is_best:
+                best_epoch = epoch
+                best_val_loss = val_loss_ema
+                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+            postfix = {
+                "Train": f"{epoch_loss:.{precision}e}",
+                "Val": (
+                    f"{Color.RED}{val_loss_ema:.3e}{Color.OFF}"
+                    if is_best
+                    else f"{val_loss_ema:.3e}"
+                ),
+                "Bias": f"{val_bias:.2e}",
+                "Scat": f"{val_scatter:.2e}",
+            }
+            pbar.set_postfix(postfix)
+
+            line += (
+                f" | Val: {val_loss_ema:.3e}"
+                + (" BEST" if is_best else "")
+                + f" | Bias: {val_bias:.2e}"
+                + f" | Scat: {val_scatter:.2e}"
+                + f" | Time: {time_string(time.time() - start_time)}"
+            )
+
+        else:
+            best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+
+        if not tqdm_enabled:
+            print(line, flush=True)
+
+        # --- Save checkpoint ---
+        if filename:
+            is_final_epoch = (epoch + 1) == epochs
+            is_save_epoch = (epoch + 1) % save_freq == 0
+            if is_final_epoch or is_save_epoch or (val_loader and is_best):
+                checkpoint_data = {
+                    "epoch": epoch + 1,
+                    "model": model,
+                    "optimizer": optimizer,
+                    "best_weights": best_weights,
+                    "filename": filename,
+                    "best_val_loss": best_val_loss,
+                    "val_loss_list": val_loss_list,
+                    "train_loss_list": train_loss_list,
+                    "val_bias_list": val_bias_list,
+                    "val_scatter_list": val_scatter_list,
+                    "lr_list": lr_list[1:],
+                    "scheduler_state_dict": (
+                        copy.deepcopy(scheduler.state_dict())
+                        if scheduler is not None
+                        else None
+                    ),
+                    "val_loss_ema": val_loss_ema,
+                }
+
+                print(
+                    f"Saving checkpoint at Epoch {epoch + 1} | "
+                    f"{time_string(time.time() - start_time)}"
+                )
+                save_ckp(**checkpoint_data)
+
+    print("-" * 50)
+    print(f"Training completed in {time_string(time.time() - start_time)}")
+    if val_loader:
+        print(
+            f"Best Epoch: {best_epoch + 1}\n"
+            f"Val Loss EMA: {best_val_loss:.{precision}e}\n"
+            f"Bias: {val_bias_list[best_epoch]:.2e}\n"
+            f"Scatter: {val_scatter_list[best_epoch]:.2e}"
+        )
+    print(f"Save path: {filename}")
+    print("-" * 50)
+
+    return best_weights, train_loss_list, val_loss_list

@@ -4,7 +4,7 @@ import torch
 
 from deepshape2.data.loaders import ShapeDatasetLight, dataloader
 from deepshape2.models import shapenet_full
-from deepshape2.shape_measurement.main import predict, train
+from deepshape2.shape_measurement.main import predict, train2
 from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
 
@@ -19,7 +19,7 @@ MODEL_DIR = cfg["MODEL_DIR"]
 BSIZE = 64
 thresh = 6
 
-loc_weights = MODEL_DIR + f"shape_full_thresh_{thresh}_l1.pt"
+loc_weights = MODEL_DIR + "shape_full_new.pt"
 print("Weights location:", loc_weights)
 
 
@@ -49,25 +49,35 @@ model = model.to(device)
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
 
+for p in model.encode.parameters():
+    p.requires_grad = False
+
+for name, p in model.encode.named_parameters():
+    if "14" in name:
+        p.requires_grad = True
+
+psf_params = [p for p in model.encode.parameters() if p.requires_grad]
+
+psf_param_ids = {id(p) for p in psf_params}
+
+main_params = [
+    p for p in model.parameters() if p.requires_grad and id(p) not in psf_param_ids
+]
 
 optimizer = torch.optim.Adam(
-    filter(lambda p: p.requires_grad, model.parameters()),
-    lr=1e-4,
+    [
+        {"params": main_params, "lr": 1e-4},
+        {"params": psf_params, "lr": 5e-5},
+    ],
     weight_decay=1e-5,
 )
 
 loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
 
-n_epochs = 300
+n_epochs = 120
 
-scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-    optimizer,
-    factor=0.5,
-    patience=40,
-    min_lr=1e-6,
-)
 
-best_weights, train_loss_list, val_loss_list = train(
+best_weights, train_loss_list, val_loss_list = train2(
     model,
     train_loader,
     val_loader,
@@ -75,7 +85,7 @@ best_weights, train_loss_list, val_loss_list = train(
     device=device,
     filename=loc_weights,
     optimizer=optimizer,
-    scheduler=scheduler,
+    scheduler=None,
     save_freq=10,
     tqdm_enabled=TQDM_FLAG,
     loss_fn=loss_fn,

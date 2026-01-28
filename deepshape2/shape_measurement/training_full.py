@@ -17,9 +17,10 @@ MODEL_DIR = cfg["MODEL_DIR"]
 
 
 BSIZE = 64
-thresh = 6
+peak_thresh = 3
 
-loc_weights = MODEL_DIR + "shape_full_new.pt"
+
+loc_weights = MODEL_DIR + f"shape_full_new_thresh_{peak_thresh}.pt"
 print("Weights location:", loc_weights)
 
 
@@ -31,7 +32,8 @@ set_seed()
 # %% Load Data and Model
 dataset = ShapeDatasetLight(
     path=DATA_DIR + "trainset.h5",
-    thresh=thresh * 0.71e-6,
+    peak_thresh=peak_thresh,
+    flux_thresh=50,
 )
 
 
@@ -72,7 +74,7 @@ optimizer = torch.optim.Adam(
     weight_decay=1e-5,
 )
 
-loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
+loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
 
 n_epochs = 120
 

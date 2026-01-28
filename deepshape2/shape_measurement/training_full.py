@@ -1,11 +1,12 @@
 # %%Import Libraries
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, TensorDataset
 
 from deepshape2.data.loaders import ShapeDatasetLight, dataloader
 from deepshape2.models import shapenet_full
 from deepshape2.shape_measurement.main import predict, train2
-from deepshape2.utils import get_freest_gpu, load_config, set_seed
+from deepshape2.utils import get_freest_gpu, load_config, load_h5, set_seed
 from deepshape2.visualization import plot_bias, plot_losses
 
 # %% Load Config and Set Parameters
@@ -20,7 +21,7 @@ BSIZE = 64
 peak_thresh = 3
 
 
-loc_weights = MODEL_DIR + f"shape_full_old_thresh_{peak_thresh}.pt"
+loc_weights = MODEL_DIR + f"shape_full_new_thresh_{peak_thresh}.pt"
 print("Weights location:", loc_weights)
 
 
@@ -54,18 +55,16 @@ model = model.to(device)
 for p in model.encode.parameters():
     p.requires_grad = False
 
-# for name, p in model.encode.named_parameters():
-#     if "14" in name:
-#         p.requires_grad = True
+for name, p in model.encode.named_parameters():
+    if "14" in name:
+        p.requires_grad = True
 
-# psf_params = [p for p in model.encode.parameters() if p.requires_grad]
+psf_params = [p for p in model.encode.parameters() if p.requires_grad]
 
-# psf_param_ids = {id(p) for p in psf_params}
+psf_param_ids = {id(p) for p in psf_params}
 
 main_params = [
-    p
-    for p in model.parameters()
-    if p.requires_grad  # and id(p) not in psf_param_ids
+    p for p in model.parameters() if p.requires_grad and id(p) not in psf_param_ids
 ]
 
 optimizer = torch.optim.Adam(
@@ -76,8 +75,8 @@ optimizer = torch.optim.Adam(
     weight_decay=1e-5,
 )
 
-# loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
-loss_fn = torch.nn.MSELoss()
+loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
+# loss_fn = torch.nn.MSELoss()
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
     optimizer,
@@ -118,6 +117,53 @@ ypred, ytest, images = predict(
     model,
     weights=best_weights,
     data_loader=val_loader,
+    device=device,
+    tqdm_enabled=TQDM_FLAG,
+)
+
+# Calculate Bias
+plot_bias(ypred, ytest, power=1e3, ellipticity_cutoff=1, lim=0.4)
+print(
+    f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
+)
+
+# %% Calculate results on test set
+hf_test = load_h5(DATA_DIR + "deep_set.h5")["patch_000"]
+
+recon = hf_test["isolated_dirty_psf"]["recon"][:]
+psf = hf_test["isolated_dirty_psf"]["psf"][:]
+images = np.stack([recon, psf], axis=1).astype(np.float32)
+
+img_min = images.min(axis=(2, 3), keepdims=True)
+img_max = images.max(axis=(2, 3), keepdims=True)
+images = (images - img_min) / (img_max - img_min)
+
+
+df = hf_test["patch_df"][()]
+flux_mask = df["flux_mask"]
+shapes = np.stack([df["e1"][flux_mask], df["e2"][flux_mask]], axis=1).astype(np.float32)
+flux = df["flux"][flux_mask].astype(np.float32)
+
+peaks = hf_test["peaks"][:]
+
+mask = (flux > 50 * 1e-6) & (peaks > peak_thresh * 0.71e-6)
+
+
+images_T = torch.tensor(images[mask], dtype=torch.float32)
+shapes_T = torch.tensor(shapes[mask], dtype=torch.float32)
+dataset = TensorDataset(images_T, shapes_T)
+
+testloader = DataLoader(
+    dataset,
+    batch_size=32,
+    shuffle=False,
+    drop_last=False,
+)
+
+ypred, ytest, images = predict(
+    model,
+    weights=best_weights,
+    data_loader=testloader,
     device=device,
     tqdm_enabled=TQDM_FLAG,
 )

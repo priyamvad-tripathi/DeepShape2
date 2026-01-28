@@ -70,7 +70,7 @@ main_params = [
 optimizer = torch.optim.Adam(
     [
         {"params": main_params, "lr": 1e-4},
-        # {"params": psf_params, "lr": 1e-5},
+        {"params": psf_params, "lr": 1e-5},
     ],
     weight_decay=1e-5,
 )

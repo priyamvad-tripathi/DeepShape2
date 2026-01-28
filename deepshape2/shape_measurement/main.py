@@ -376,12 +376,12 @@ def train2(
                 loss.backward()
                 optimizer.step()
 
-                with torch.no_grad():
-                    err = (pred - target).abs()
+                # with torch.no_grad():
+                #     err = (pred - target).abs()
 
-                grad_norm = (
-                    list(model.encode.named_parameters())[12][1].grad.norm().item()
-                )
+                # grad_norm = (
+                #     list(model.encode.named_parameters())[12][1].grad.norm().item()
+                # )
 
                 batch_losses.append(loss.detach().cpu())
 
@@ -401,8 +401,8 @@ def train2(
         train_loss_list.append(epoch_loss)
 
         line = f"Train Loss: {epoch_loss:.{precision}e}"
-        line += f" | Grad Norm: {grad_norm:.3e}"
-        line += f" | Frac < beta: {(err < 0.05).float().mean().item():.3e}"
+        # line += f" | Grad Norm: {grad_norm:.3e}"
+        # line += f" | Frac < beta: {(err < 0.05).float().mean().item():.3e}"
 
         # --- Validation ---
         if val_loader:

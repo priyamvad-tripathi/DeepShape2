@@ -423,6 +423,34 @@ class ShapeDatasetLight(Dataset):
         return x, y
 
 
+# %%
+class ReconDataset(Dataset):
+    def __init__(
+        self,
+        h5_path,
+        mask,
+        dirty_key="dirty",
+        psf_key="psf",
+    ):
+        self.h5_path = h5_path
+        self.mask = np.asarray(mask)
+        self.indices = np.where(self.mask)[0]
+        self.dirty_key = dirty_key
+        self.psf_key = psf_key
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, idx):
+        i = self.indices[idx]
+        with h5py.File(self.h5_path, "r") as hf:
+            dirty = hf[self.dirty_key][i]
+            psf = hf[self.psf_key][i]
+
+        im = np.stack([dirty, psf], axis=0)
+        return torch.from_numpy(im).float(), i
+
+
 # %% PSF Dataloader
 class ImageDataset(Dataset):
     """

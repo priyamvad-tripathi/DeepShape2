@@ -133,7 +133,7 @@ def reconstruct_facets_h5(
     """
 
     # --- open once to get mask and shapes
-    with h5py.File(h5_path, "r+") as hf:
+    with h5py.File(h5_path, "a") as hf:
         flux = hf["flux"][:]
         mask = flux > thresh * 1e-6
         n_total = len(flux)
@@ -214,7 +214,7 @@ def reconstruct_facets_h5(
 
             if dump_to_file:
                 # --- write back
-                with h5py.File(h5_path, "r+") as hf:
+                with h5py.File(h5_path, "a") as hf:
                     hf[recon_key][indices.numpy()] = recon_np
 
                     if deblender is not None:

@@ -18,10 +18,10 @@ MODEL_DIR = cfg["MODEL_DIR"]
 
 
 BSIZE = 64
-peak_thresh = 3
+peak_factor_thresh = 1.5
 
 
-loc_weights = MODEL_DIR + f"shape_full_new2_thresh_{peak_thresh}.pt"
+loc_weights = MODEL_DIR + "shape_full_1.pt"
 print("Weights location:", loc_weights)
 
 
@@ -31,12 +31,11 @@ set_seed()
 
 
 # %% Load Data and Model
-dataset = ShapeDatasetLight(
-    path=DATA_DIR + "trainset.h5",
-    peak_thresh=peak_thresh,
-    flux_thresh=50,
-)
 
+dataset = ShapeDatasetLight(
+    path=DATA_DIR + "trainset2.h5",
+    peak_factor_thresh=10000,  # Very high to include all data
+)
 
 train_loader, val_loader = dataloader(
     dataset=dataset,
@@ -44,13 +43,13 @@ train_loader, val_loader = dataloader(
     split=(0.8, 0.2),
 )
 
-#  Load model
+# %% Load model
 model = shapenet_full()
 model = model.to(device)
 # print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
 checkpoint = torch.load(
-    MODEL_DIR + f"shape_full_new_thresh_{peak_thresh}.pt",
+    MODEL_DIR + "shape_full_new_thresh_3.pt",
     map_location=device,
     weights_only=False,
 )
@@ -78,13 +77,13 @@ main_params = [
 
 optimizer = torch.optim.Adam(
     [
-        {"params": main_params, "lr": 1e-4 * 0.5},
-        {"params": psf_params, "lr": 1e-5 * 0.5},
+        {"params": main_params, "lr": 1e-4},
+        {"params": psf_params, "lr": 1e-5},
     ],
     weight_decay=1e-5,
 )
 
-loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
+loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
 # loss_fn = torch.nn.MSELoss()
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -155,7 +154,7 @@ flux = df["flux"][flux_mask].astype(np.float32)
 
 peaks = hf_test["peaks"][:]
 
-mask = (flux > 50 * 1e-6) & (peaks > peak_thresh * 0.71e-6)
+mask = (flux > 50 * 1e-6) & (peaks > 3 * 0.71e-6)
 
 
 images_T = torch.tensor(images[mask], dtype=torch.float32)

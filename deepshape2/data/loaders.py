@@ -398,15 +398,19 @@ class RandomSubsetSampler(Sampler):
 
 
 class ShapeDatasetLight(Dataset):
-    def __init__(self, path, peak_thresh=4, flux_thresh=50):
+    def __init__(self, path, peak_thresh=4, flux_thresh=50, peak_factor_thresh=None):
         self.hf = h5py.File(path, "r")
 
-        peaks = self.hf["peaks"][:]
-        fluxes = self.hf["fluxes"][:]
+        if peak_factor_thresh is None:
+            peaks = self.hf["peaks"][:]
+            fluxes = self.hf["fluxes"][:]
 
-        self.idxs = np.where(
-            (peaks > peak_thresh * 0.71e-6) & (fluxes > flux_thresh * 1e-6)
-        )[0]
+            self.idxs = np.where(
+                (peaks > peak_thresh * 0.71e-6) & (fluxes > flux_thresh * 1e-6)
+            )[0]
+        else:
+            peak_factors = self.hf["peak_factor"][:]
+            self.idxs = np.where(peak_factors < peak_factor_thresh)[0]
 
         self.images = self.hf["images"]
         self.shapes = self.hf["shapes"]

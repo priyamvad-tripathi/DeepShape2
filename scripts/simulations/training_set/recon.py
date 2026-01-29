@@ -32,10 +32,19 @@ result = reconstruct_facets(
 )
 
 recon = result["recon"].astype(np.float32)
+decon = result["decon"].astype(np.float32)
 
 hf.create_dataset(
     "recon",
     data=recon,
+    dtype=np.float32,
+    chunks=(1, 128, 128),
+    shape=(0, 128, 128),
+    maxshape=(None, 128, 128),
+)
+hf.create_dataset(
+    "decon",
+    data=decon,
     dtype=np.float32,
     chunks=(1, 128, 128),
     shape=(0, 128, 128),

@@ -2,45 +2,40 @@
 import time
 
 from deepshape2.simulation import simulate_visibilities
-from deepshape2.utils import load_config, load_h5, post_step, save
+from deepshape2.utils import load_config, load_h5, post_step
 
 # %% Set default parameters
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 
-patches = {"wide_set": "patch_051", "deep_set": "patch_000"}
+patches = [f"patch_{nl + 1:03d}" for nl in range(71, 100)]
 
 dirty_wide = {}
 start = time.time()
 
 # %% Loop over patches and simulate visibilities
-for dataset_type, patch in patches.items():
-    # Construct HDF5 path and visibility filename
-    h5_path = DATA_DIR + f"{dataset_type}.h5"
-    vis_filename = DATA_DIR + f"MS/vis_{dataset_type}_{patch}.ms"
+h5_path = DATA_DIR + "wide_set.h5"
+with load_h5(h5_path, "r") as data:
+    for patch in patches:
+        # Construct HDF5 path and visibility filename
 
-    post_step(f"Loading {patch} from {dataset_type}", start)
+        vis_filename = DATA_DIR + f"MS/vis_wide_set_{patch}.ms"
 
-    # Load HDF5 data
-    with load_h5(h5_path, "r") as data:
+        post_step(f"Loading {patch} from wide_set", start)
+
+        # Load HDF5 data
+
         sky = data[patch]["sky"][()]
         patch_ra, patch_dec = data[patch].attrs["centre"]
 
         # Simulate visibilities and create dirty image
-        vt, dirty = simulate_visibilities(
+        vt = simulate_visibilities(
             field=sky,
             ra_pointing=patch_ra,
             dec_pointing=patch_dec,
             filename=vis_filename,
-            create_dirty=True,
+            # create_dirty=True,
             threads=60,
         )
 
-        post_step(f"Simulating visibilities for {patch} ({dataset_type})", start)
-
-        # Store dirty image with clear key
-        dirty_wide[f"{dataset_type}_{patch}"] = dirty
-
-# %% Save all dirty images
-save(dirty_wide, DATA_DIR + "MS/dirty_image_patches.pkl")
-post_step("Saving all dirty images", start)
+        post_step(f"Simulating visibilities for {patch})", start)

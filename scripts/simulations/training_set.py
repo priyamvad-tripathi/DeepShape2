@@ -1,4 +1,5 @@
 import argparse
+import logging
 import time
 import warnings
 
@@ -18,8 +19,8 @@ from deepshape2.utils import (
     post_step,
 )
 
-warnings.filterwarnings("ignore", category=UserWarning)
-
+warnings.filterwarnings("ignore")
+logging.basicConfig(level=logging.CRITICAL)
 # --------------------------------------------------
 # Config
 # --------------------------------------------------

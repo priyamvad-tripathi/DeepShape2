@@ -21,7 +21,7 @@ BSIZE = 64
 peak_factor_thresh = 1.5
 
 
-loc_weights = MODEL_DIR + "shape_full_1.pt"
+loc_weights = MODEL_DIR + "shape_full_stage_1.pt"
 print("Weights location:", loc_weights)
 
 
@@ -33,7 +33,7 @@ set_seed()
 # %% Load Data and Model
 
 dataset = ShapeDatasetLight(
-    path=DATA_DIR + "trainset2.h5",
+    path=DATA_DIR + "trainset_100.h5",
     peak_factor_thresh=10000,  # Very high to include all data
 )
 
@@ -49,7 +49,7 @@ model = model.to(device)
 # print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
 checkpoint = torch.load(
-    MODEL_DIR + "shape_full_new_thresh_3.pt",
+    MODEL_DIR + "shape_full_1.pt",
     map_location=device,
     weights_only=False,
 )
@@ -94,7 +94,7 @@ scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
 )
 
 
-n_epochs = 300
+n_epochs = 400
 
 
 best_weights, train_loss_list, val_loss_list = train2(
@@ -140,6 +140,8 @@ hf_test = load_h5(DATA_DIR + "deep_set.h5")["patch_000"]
 
 recon = hf_test["isolated_dirty_psf"]["recon"][:]
 psf = hf_test["isolated_dirty_psf"]["psf"][:]
+# recon = hf_test["recon"][:]
+# psf = hf_test["psf"][:]
 images = np.stack([recon, psf], axis=1).astype(np.float32)
 
 img_min = images.min(axis=(2, 3), keepdims=True)

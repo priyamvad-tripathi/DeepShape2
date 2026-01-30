@@ -141,15 +141,15 @@ def reconstruct_facets_h5(
 
         # create output datasets if needed
         if dump_to_file:
-            if recon_key not in hf:
-                hf.create_dataset(
-                    recon_key,
-                    shape=(n_total, H, W),
-                    dtype=np.float32,
-                    chunks=(1, H, W),
-                )
-            else:
+            if recon_key in hf:
                 del hf[recon_key]
+
+            hf.create_dataset(
+                recon_key,
+                shape=(n_total, H, W),
+                dtype=np.float32,
+                chunks=(1, H, W),
+            )
 
             if deblender is not None:
                 if decon_key in hf:

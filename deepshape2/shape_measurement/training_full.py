@@ -21,7 +21,7 @@ BSIZE = 64
 peak_factor_thresh = 1.5
 
 
-loc_weights = MODEL_DIR + "shape_full_stage_2.pt"
+loc_weights = MODEL_DIR + "shape_network_full.pt"
 print("Weights location:", loc_weights)
 
 
@@ -48,14 +48,6 @@ model = shapenet_full()
 model = model.to(device)
 # print(model(torch.randn(10, 2, 128, 128).to(device)).size())
 
-checkpoint = torch.load(
-    MODEL_DIR + "shape_full_stage_1_scratch.pt",
-    map_location=device,
-    weights_only=False,
-)
-best_weights = checkpoint["best_weights"]
-model.load_state_dict(best_weights)
-
 
 # %% Train the model and use it to make predictions
 #! Test with different paramters for best results
@@ -77,13 +69,13 @@ main_params = [
 
 optimizer = torch.optim.Adam(
     [
-        {"params": main_params, "lr": 0.1 * 1e-4},
-        {"params": psf_params, "lr": 0.1 * 1e-5},
+        {"params": main_params, "lr": 1e-4},
+        {"params": psf_params, "lr": 1e-5},
     ],
     weight_decay=1e-5,
 )
 
-loss_fn = torch.nn.SmoothL1Loss(beta=0.05)
+loss_fn = torch.nn.SmoothL1Loss(beta=0.1)
 # loss_fn = torch.nn.MSELoss()
 
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
@@ -134,52 +126,67 @@ plot_bias(ypred, ytest, power=1e3, ellipticity_cutoff=1, lim=0.4)
 print(
     f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
 )
-
 # %% Calculate results on test set
-hf_test = load_h5(DATA_DIR + "deep_set.h5")["patch_000"]
 
-# recon = hf_test["isolated_dirty_psf"]["recon"][:]
-# psf = hf_test["isolated_dirty_psf"]["psf"][:]
-recon = hf_test["recon"][:]
-psf = hf_test["psf"][:]
-images = np.stack([recon, psf], axis=1).astype(np.float32)
-
-img_min = images.min(axis=(2, 3), keepdims=True)
-img_max = images.max(axis=(2, 3), keepdims=True)
-images = (images - img_min) / (img_max - img_min)
-
+hf_test = load_h5(DATA_DIR + "deep_set.h5", "a")["patch_000"]
 
 df = hf_test["patch_df"][()]
 flux_mask = df["flux_mask"]
-shapes = np.stack([df["e1"][flux_mask], df["e2"][flux_mask]], axis=1).astype(np.float32)
-flux = df["flux"][flux_mask].astype(np.float32)
 
+shapes = np.stack(
+    [df["e1"][flux_mask], df["e2"][flux_mask]],
+    axis=1,
+).astype(np.float32)
+
+flux = df["flux"][flux_mask].astype(np.float32)
 peaks = hf_test["peaks"][:]
 
-mask = (flux > 50 * 1e-6) & (peaks > 3 * 0.71e-6)
+mask = (flux > 0 * 1e-6) & (peaks > 0 * 0.71e-6)
 
+for use_isolated in (False, True):
+    grp = hf_test["isolated_dirty_psf"] if use_isolated else hf_test
 
-images_T = torch.tensor(images[mask], dtype=torch.float32)
-shapes_T = torch.tensor(shapes[mask], dtype=torch.float32)
-dataset = TensorDataset(images_T, shapes_T)
+    recon = grp["recon"][:]
+    psf = grp["psf"][:]
 
-testloader = DataLoader(
-    dataset,
-    batch_size=32,
-    shuffle=False,
-    drop_last=False,
-)
+    images = np.stack([recon, psf], axis=1).astype(np.float32)
 
-ypred, ytest, images = predict(
-    model,
-    weights=best_weights,
-    data_loader=testloader,
-    device=device,
-    tqdm_enabled=TQDM_FLAG,
-)
+    img_min = images.min(axis=(2, 3), keepdims=True)
+    img_max = images.max(axis=(2, 3), keepdims=True)
+    images = (images - img_min) / (img_max - img_min)
 
-# Calculate Bias
-plot_bias(ypred, ytest, power=1e3, ellipticity_cutoff=1, lim=0.4)
-print(
-    f"The pearson coefficients are: {1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
-)
+    images_T = torch.tensor(images[mask], dtype=torch.float32)
+    shapes_T = torch.tensor(shapes[mask], dtype=torch.float32)
+
+    dataset = TensorDataset(images_T, shapes_T)
+    testloader = DataLoader(
+        dataset,
+        batch_size=32,
+        shuffle=False,
+        drop_last=False,
+    )
+
+    ypred, ytest, _ = predict(
+        model,
+        weights=best_weights,
+        data_loader=testloader,
+        device=device,
+        tqdm_enabled=TQDM_FLAG,
+    )
+
+    plot_bias(ypred, ytest, power=1e3, ellipticity_cutoff=1, lim=0.4)
+    print(
+        f"{'isolated' if use_isolated else 'direct'} | "
+        f"{1 - np.corrcoef(ytest[:, 0], ypred[:, 0])[0, 1]:.2e}/"
+        f"{1 - np.corrcoef(ytest[:, 1], ypred[:, 1])[0, 1]:.2e}"
+    )
+
+    if "shape_pred" in grp:
+        del grp["shape_pred"]
+
+    grp.create_dataset(
+        name="shape_pred",
+        data=ypred.astype(np.float32),
+    )
+hf_test.file.flush()
+hf_test.file.close()

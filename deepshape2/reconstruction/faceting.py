@@ -54,7 +54,7 @@ def chunked_iterable(seq, size):
         yield seq[i : i + size]
 
 
-def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=100, client=None):
+def get_facets(vis, galaxy_locations, NPIX_facet=256, batch_size=64, client=None):
     dirty_all, psf_all = [], []
     n = len(galaxy_locations)
     total_batches = (n + batch_size - 1) // batch_size  # ceiling division

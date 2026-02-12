@@ -25,6 +25,7 @@ images = []
 shape_all = []
 peaks = []
 blend_all = []
+fluxes = []
 
 
 with (
@@ -37,7 +38,6 @@ with (
         shape=(0, 2, 128, 128),
         maxshape=(None, 2, 128, 128),
         dtype=np.float32,
-        compression="gzip",
         chunks=(1000, 2, 128, 128),
     )
 
@@ -46,7 +46,6 @@ with (
         shape=(0, 2),
         maxshape=(None, 2),
         dtype=np.float32,
-        compression="gzip",
         chunks=(1000, 2),
     )
 
@@ -55,7 +54,6 @@ with (
         shape=(0,),
         maxshape=(None,),
         dtype=np.float32,
-        compression="gzip",
     )
 
     peak_ds = hf_out.create_dataset(
@@ -63,7 +61,12 @@ with (
         shape=(0,),
         maxshape=(None,),
         dtype=np.float32,
-        compression="gzip",
+    )
+    fluxes_ds = hf_out.create_dataset(
+        "fluxes",
+        shape=(0,),
+        maxshape=(None,),
+        dtype=np.float32,
     )
 
     total = 0
@@ -75,12 +78,13 @@ with (
             f"Processing group: {group_name} | Time elapsed: {time_string(time.time() - start)}"
         )
 
-        # 1) Shapes
+        # 1) Shapes and Fluxes
         df = group["patch_df"][()]
         flux_mask = df["flux_mask"]
         shape = np.stack([df["e1"][flux_mask], df["e2"][flux_mask]], axis=1).astype(
             np.float32
         )
+        flux = df["flux"][flux_mask].astype(np.float32)
 
         # 2) Images
         recon = group["recon"][:]
@@ -131,6 +135,9 @@ with (
 
         peak_ds.resize((new_total,))
         peak_ds[total:new_total] = peak_vals
+
+        fluxes_ds.resize((new_total,))
+        fluxes_ds[total:new_total] = flux
 
         total = new_total
 

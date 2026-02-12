@@ -9,7 +9,12 @@ from deepshape2.visualization.base import SMALL_SIZE, savefig, set_style
 
 set_style()
 
-__all__ = ["probability_distribution_metric", "binned_boxplot", "metric_dependence"]
+__all__ = [
+    "probability_distribution_metric",
+    "binned_boxplot",
+    "metric_dependence",
+    "shape_error_vs_flux",
+]
 
 
 colors = sns.color_palette("tab10", n_colors=3)
@@ -392,4 +397,66 @@ def metric_dependence(
 
         axes.append((ax1, ax2, ax3))
 
+    savefig(fname)
+
+
+# %%
+
+
+def shape_error_vs_flux(
+    shape_err_list,
+    flux,
+    bin_edges,
+    method_names=("Isolated", "Wide field"),
+    colors=("#DC143C", "#1E90FF"),
+    markers=("o", "s"),
+    fname=None,
+):
+    def binned_quantiles(x, y, bins):
+        bins = np.asarray(bins)
+
+        centers = 0.5 * (bins[:-1] + bins[1:])
+        q25 = np.full(len(centers), np.nan)
+        q50 = np.full(len(centers), np.nan)
+        q75 = np.full(len(centers), np.nan)
+
+        for i in range(len(centers)):
+            if i < len(centers) - 1:
+                mask = (x >= bins[i]) & (x < bins[i + 1])
+            else:
+                mask = (x >= bins[i]) & (x <= bins[i + 1])
+
+            vals = y[mask]
+            vals = vals[~np.isnan(vals)]
+
+            if len(vals) > 0:
+                q25[i], q50[i], q75[i] = np.percentile(vals, [25, 50, 75])
+
+        return centers, q25, q50, q75
+
+    fig = plt.figure(figsize=(6, 4.2))
+    ax = fig.add_subplot(111)
+    plt.sca(ax)
+
+    for i, shape_err in enumerate(shape_err_list):
+        shape_err = np.asarray(shape_err)
+
+        c, q25, q50, q75 = binned_quantiles(flux, shape_err, bin_edges)
+
+        ax.plot(
+            c,
+            q50,
+            color=colors[i],
+            marker=markers[i],
+            lw=1.5,
+            label=method_names[i],
+        )
+        ax.fill_between(c, q25, q75, color=colors[i], alpha=0.3)
+
+    ax.set(
+        xlabel=r"Flux $[\mu\mathrm{Jy}]$",
+        ylabel=r"$\Delta \epsilon$",
+    )
+
+    ax.legend()
     savefig(fname)

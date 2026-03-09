@@ -285,6 +285,7 @@ def metric_dependence(
     markers=("o", "s"),
     fname=None,
     metric_lims_list=None,
+    remove_bg=False,
 ):
     """
     Plot metric dependence for multiple metrics and multiple methods.
@@ -397,7 +398,7 @@ def metric_dependence(
 
         axes.append((ax1, ax2, ax3))
 
-    savefig(fname)
+    savefig(fname, remove_bg=remove_bg)
 
 
 # %%

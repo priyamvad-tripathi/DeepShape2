@@ -142,6 +142,7 @@ def contour_plot(
     cmaps = kwargs.get("cmaps", ["Reds", "Blues"])
     colors = kwargs.get("colors", ["firebrick", "blue"])
     fname = kwargs.get("fname", None)
+    remove_bg = kwargs.get("remove_bg", False)
 
     gs = gridspec.GridSpec(1, 2, width_ratios=[4, 1])
 
@@ -205,7 +206,7 @@ def contour_plot(
     ]
     ax.legend(handles=handles)
 
-    savefig(fname)
+    savefig(fname, remove_bg=remove_bg)
 
 
 # %%

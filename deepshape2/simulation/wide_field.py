@@ -85,7 +85,7 @@ def generate_patch_locations(
     return chosen_centers
 
 
-def random_patch(center, catalogue_type="wide", patch_size=1.0):
+def random_patch(center, catalogue_type, patch_size=1.0):
     """
     Extract a patch around a given center (cx, cy) in flat-sky coordinates.
     Returns the galaxies in the patch and RA/Dec of the patch center.
@@ -195,7 +195,7 @@ def compute_pixel_coordinates(patch, patch_center_flat, NPIX_SKY=NPIX_SKY):
     return patch_out, patch_center_ra_dec
 
 
-def _simulate_galaxy(row, simple=False, min_flux=10e-6):
+def _simulate_galaxy(row, simple=False, min_flux=10e-6, npix_stamp=NPIX_STAMP):
     flux = row["flux"]
     scale_length = row["size"]
     e1 = row["e1"]
@@ -203,6 +203,8 @@ def _simulate_galaxy(row, simple=False, min_flux=10e-6):
 
     if simple:
         sersic_index = 1
+    elif "sersic_index" in row and not np.isnan(row["sersic_index"]):
+        sersic_index = row["sersic_index"]
     else:
         sersic_index = np.random.choice(sersic_indexes)
 
@@ -224,7 +226,7 @@ def _simulate_galaxy(row, simple=False, min_flux=10e-6):
     if flux < min_flux:
         isolated_stamp = 0
     else:
-        isolated_stamp = process_stamp(stamp.array.copy(), NPIX=NPIX_STAMP)
+        isolated_stamp = process_stamp(stamp.array.copy(), NPIX=npix_stamp)
 
     return stamp, sersic_index, isolated_stamp
 
@@ -233,6 +235,7 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     verbosity = kwargs.get("verbosity", 0)
     simple = kwargs.get("simple", False)
     min_flux = kwargs.get("min_flux", 10e-6)
+    npix_stamp = kwargs.get("npix_stamp", NPIX_STAMP)
 
     # Step 1: Initialize wide-field image
     bounds = galsim.BoundsI(0, NPIX_SKY - 1, 0, NPIX_SKY - 1)
@@ -250,9 +253,12 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
         )
 
     # Step 2: Run dask to simulate galaxies in parallel
-    def simulate_batch(batch, simple=simple, min_flux=min_flux):
+    def simulate_batch(batch, simple=simple, min_flux=min_flux, npix_stamp=npix_stamp):
         return [
-            _simulate_galaxy(row, simple=simple, min_flux=min_flux) for row in batch
+            _simulate_galaxy(
+                row, simple=simple, min_flux=min_flux, npix_stamp=npix_stamp
+            )
+            for row in batch
         ]
 
     cols = ["flux", "size", "e1", "e2"]
@@ -261,7 +267,12 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     # chunk rows into groups of 100
     chunk_size = 100
     tasks = [
-        delayed(simulate_batch)(rows[i : i + chunk_size], simple=simple)
+        delayed(simulate_batch)(
+            rows[i : i + chunk_size],
+            simple=simple,
+            min_flux=min_flux,
+            npix_stamp=npix_stamp,
+        )
         for i in range(0, len(rows), chunk_size)
     ]
 

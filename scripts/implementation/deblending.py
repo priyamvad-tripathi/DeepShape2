@@ -103,12 +103,12 @@ for model in ["model_1", "model_2", "model_3"]:
     tit_recons.append([f"{p:.2f} dB/ {sh:.3f}" for p, sh in zip(psnr, shape_diff)])
 
 plot(
-    [isolated, blends, recon[0], recon[1], recon[2]],
+    [blends, isolated, recon[0], recon[1], recon[2]],
     cbar=True,
     same_scale=[0, 1, 2, 3, 4],
-    scale_row=0,
+    scale_row=1,
     caption=["Isolated", "Blended", "VAE-MHA", "VAE-CNN", "CAT"],
-    subtitles=[tit1, tit2, tit_recons[0], tit_recons[1], tit_recons[2]],
+    subtitles=[tit2, tit1, tit_recons[0], tit_recons[1], tit_recons[2]],
     fname=RESULTS_DIR + "deblending/stamps.pdf",
 )
 

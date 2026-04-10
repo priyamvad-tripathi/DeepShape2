@@ -107,7 +107,7 @@ plot(
     cbar=True,
     same_scale=[0, 1, 2, 3, 4],
     scale_row=1,
-    caption=["Isolated", "Blended", "VAE-MHA", "VAE-CNN", "CAT"],
+    caption=["Blended", "Isolated", "VAE-MHA", "VAE-CNN", "CAT"],
     subtitles=[tit2, tit1, tit_recons[0], tit_recons[1], tit_recons[2]],
     fname=RESULTS_DIR + "deblending/stamps.pdf",
 )

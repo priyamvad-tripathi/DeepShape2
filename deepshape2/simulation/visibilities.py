@@ -233,6 +233,7 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     verbosity = kwargs.get("verbosity", 0)
     do_wstacking = kwargs.get("do_wstacking", True)
     do_psf = kwargs.get("do_psf", True)
+    do_dirty = kwargs.get("do_dirty", True)
     asarray = kwargs.get("asarray", True)
     threads = kwargs.get("threads", 20)
 
@@ -254,15 +255,16 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     )
 
     # Invert to obtain dirty image
-    dirty_img, _ = invert_ng(
-        vis_reweighted,
-        model,
-        verbosity=verbosity,
-        do_wstacking=do_wstacking,
-        threads=threads,
-    )
+    dirty_img, psf_img = None, None
+    if do_dirty:
+        dirty_img, _ = invert_ng(
+            vis_reweighted,
+            model,
+            verbosity=verbosity,
+            do_wstacking=do_wstacking,
+            threads=threads,
+        )
 
-    psf_img = None
     if do_psf:
         psf_img, _ = invert_ng(
             vis_reweighted,
@@ -277,9 +279,12 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
         return img.pixels.to_numpy().astype(np.float32).squeeze()
 
     if asarray:
-        if do_psf:
+        if do_dirty and do_psf:
             return _to_array(dirty_img), _to_array(psf_img)
-        return _to_array(dirty_img)
+        if do_dirty:
+            return _to_array(dirty_img)
+        if do_psf:
+            return _to_array(psf_img)
 
     if do_psf:
         return dirty_img, psf_img, _to_array(dirty_img), _to_array(psf_img)
@@ -361,6 +366,7 @@ def rephase_visibility(
     pix_loc,
     remove_w=True,
     no_correction=False,
+    npix_sky=NPIX_SKY,
 ):
     """
     Change the phase centre of a visibility dataset by applying a phasor and
@@ -385,8 +391,8 @@ def rephase_visibility(
 
     # --- Compute pixel offsets from image centre ---
     x_pix, y_pix = pix_loc
-    dx = x_pix - NPIX_SKY // 2.0
-    dy = y_pix - NPIX_SKY // 2.0
+    dx = x_pix - npix_sky // 2.0
+    dy = y_pix - npix_sky // 2.0
 
     # --- Compute new phasecentre SkyCoord ---
     pointing_centre = newvis.attrs["phasecentre"]

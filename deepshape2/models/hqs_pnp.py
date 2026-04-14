@@ -101,9 +101,9 @@ def create_model(device, path=cfg["MODEL_DIR"] + "drunet_blended.pt", **params):
     default = cfg["hqs_hyperparams"]
     hyperparams = {**default, **params}
 
-    unknown = hyperparams.keys() - default.keys()
-    if unknown:
-        raise ValueError(f"Unknown hyperparameters: {unknown}")
+    # unknown = hyperparams.keys() - default.keys()
+    # if unknown:
+    #     raise ValueError(f"Unknown hyperparameters: {unknown}")
 
     model = HQS_PnP(
         niter=hyperparams["niter"],

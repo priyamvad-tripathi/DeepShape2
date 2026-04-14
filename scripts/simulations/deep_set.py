@@ -72,7 +72,7 @@ if __name__ == "__main__":
 
         # Extract galaxies at patch location
         location = (0, 0)
-        patch = random_patch(location)
+        patch = random_patch(location, "deep")
         patch = filter_patch_by_size(filter_patch_by_flux(patch))
         patch, centre = compute_pixel_coordinates(patch, location)
         print(f"Number of galaxies in patch: {len(patch)}")

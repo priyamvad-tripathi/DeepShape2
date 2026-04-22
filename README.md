@@ -1,7 +1,22 @@
 # DeepShape II  
 ## Source separation for radio weak-lensing measurements using deep learning
 
-**DeepShape II** is a wide-field extension of the original [DeepShape](https://github.com/priyamvad-tripathi/DeepShape.git) framework. It provides tools for facet-based radio image reconstruction and deep learning-based optical deblending, enabling accurate weak-lensing shape measurements in radio surveys.
+![Python](https://img.shields.io/badge/python-3.10+-blue)
+![License](https://img.shields.io/badge/license-TBD-lightgrey)
+
+**DeepShape II** is a wide-field extension of the original [DeepShape](https://github.com/priyamvad-tripathi/DeepShape.git) framework, providing tools for facet-based source separation, plug-and-play radio image deconvolution, deep learning-based deblending, and shape measurement, with the goal of enabling accurate and scalable weak-lensing measurements in crowded radio fields.
+
+---
+
+## Method Overview
+
+- End-to-end pipeline from visibilities to shape estimates  
+- Parallelised source isolation in the visibility domain via faceting  
+- Plug-and-play image deconvolution using a trained DRUNet denoiser  
+- VAE-based network for source separation in the image domain  
+- Equivariant CNN–based shape measurement  
+
+For full methodological details, please refer to the original paper.
 
 ---
 
@@ -29,13 +44,11 @@ The implementation builds on the methodology introduced in the following works:
 
 ### 1. Clone the repository
 ```bash
-conda update conda
-conda install git
 git clone https://github.com/priyamvad-tripathi/DeepShape2.git
 cd DeepShape2
 ```
 
-### 2. Create the environment
+### 2. Create environment
 ```bash
 conda env create --name <env-name> --file environment.yml
 conda activate <env-name>
@@ -55,47 +68,61 @@ pip install -e .
 deepshape2/              Core library (models, configs, utilities)
 scripts/
   simulations/           Dataset generation scripts
-  implementation/        Application to real data
+  implementation/        Application to real/simulated data
   extra/                 Utility scripts and examples
 results/                 Reproduced results from the paper
 ```
 
 ---
 
-## Data and Pretrained Models
-
-- Pretrained model weights:  
-  https://cloud.oca.eu/index.php/s/N7t7NyYCTMjK5XA  
-
-- Datasets used in this work are available upon request  
-
-After downloading, update paths in:
-```
-deepshape2/config/default.yaml
-```
-
----
-
 ## Quick Start
 
-A minimal end-to-end example is provided in:
+Run the example pipeline:
 
-```
-scripts/extra/timing.py
+```bash
+python scripts/extra/timing.py
 ```
 
-This script demonstrates:
-- Loading trained models  
-- Working with visibility data  
+This demonstrates:
+- Model loading  
+- Visibility handling  
 - Faceting and reconstruction  
 - Deblending  
 - Shape measurement  
 
 ---
 
+## Configuration
+
+Example configuration:
+
+```yaml
+data:
+  dataset_path: /path/to/data
+
+model:
+  weights_path: /path/to/weights
+```
+
+Main config file:
+```
+deepshape2/config/default.yaml
+```
+
+---
+
+## Data and Pretrained Models
+
+- Pretrained weights:  
+  https://cloud.oca.eu/index.php/s/N7t7NyYCTMjK5XA  
+
+- Datasets available upon request  
+
+---
+
 ## Citation
 
-If you use this repository, please cite the original DeepShape paper:
+If you use this repository, please cite:
 
 ```bibtex
 @ARTICLE{deepshape25,
@@ -114,8 +141,7 @@ If you use this repository, please cite the original DeepShape paper:
 For **DeepShape II**, please search for the latest publication and cite the most recent version.
 
 ---
-
 ## Contact
 
-For questions or dataset access, please contact:  
+For questions or dataset access:  
 [priyamvad.tripathi@oca.eu](mailto:priyamvad.tripathi@oca.eu)

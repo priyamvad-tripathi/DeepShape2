@@ -20,15 +20,10 @@ In addition to the core methodology, this repository also provides scripts to si
 
 The implementation builds on the methodology introduced in the following works:
 
-1. **DeepShape II**: Wide-field radio shear measurement using deep learning *(in preparation; please search for latest version)*  
+1. **DeepShape II**: Wide-field radio shear measurement using deep learning *(in press; please search for latest version)*  
+2. **DeepShape**: Radio Weak Lensing Shear Measurements using Deep Learning: [Tripathi et al (2025)](https://www.aanda.org/articles/aa/full_html/2025/04/aa54072-25/aa54072-25.html)
+3. Shape measurement of radio galaxies using Equivariant CNNs: [Tripathi et al (2024)](https://ieeexplore.ieee.org/abstract/document/10715370)
 
-2. **DeepShape**: Radio Weak Lensing Shear Measurements using Deep Learning  
-   [Tripathi et al (2024)](https://ieeexplore.ieee.org/abstract/document/10715370)
-
-3. Shape measurement of radio galaxies using Equivariant CNNs  
-  [Tripathi et al (2025)](https://www.aanda.org/articles/aa/full_html/2025/04/aa54072-25/aa54072-25.html)
-
----
 
 ## Installation
 
@@ -50,20 +45,27 @@ pip install -r requirements.txt
 pip install -e .
 ```
 
----
 
 ## Repository Structure
 
 ```
-deepshape2/              Core library (models, configs, utilities)
+deepshape2/               Core library (models, configs, utilities)
+   data/                  Data loading for training and testing
+   deblending/            Training of the deblender network
+   models/                Definition of different models
+   reconstruction/        Faceting and HQS-PnP-based deconvolution
+   shape_measurement/     Training of the shape measurement network
+   simulation/            Simulation of radio datasets based on the T-RECS catalog
+   visualization/         Plotting utilities
+
 scripts/
-  simulations/           Dataset generation scripts
-  implementation/        Application to real/simulated data
-  extra/                 Utility scripts and examples
-results/                 Reproduced results from the paper
+   simulations/           Dataset generation scripts
+   implementation/        Application to real and simulated data
+   extra/                 Utility scripts and examples
+
+results/                  Reproduced results from the paper
 ```
 
----
 
 ## Quick Start
 
@@ -80,7 +82,6 @@ This demonstrates:
 - Deblending  
 - Shape measurement  
 - Timing each part
----
 
 # Configuration
 
@@ -89,6 +90,7 @@ An example configuration is shown below:
 ```yaml
 
 LOCAL_DIR: /path/to/data/
+TRECS_DIR: /path/to/TRECS_catalog/
 ```
 By default, the pipeline assumes the following directory structure:
 
@@ -100,16 +102,14 @@ The main configuration file is located at:
 deepshape2/config/default.yaml
 ```
 
----
 
 ## Data and Pretrained Models
 
 - Pretrained weights:  
-  https://cloud.oca.eu/index.php/s/N7t7NyYCTMjK5XA  
-
+  https://cloud.oca.eu/index.php/s/N7t7NyYCTMjK5XA
+  
 - Datasets available upon request  
 
----
 
 ## Citation
 
@@ -131,7 +131,6 @@ If you use this repository, please cite:
 
 For **DeepShape II**, please search for the latest publication and cite the most recent version.
 
----
 ## Contact
 
 For questions or dataset access:  

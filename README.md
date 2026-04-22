@@ -20,7 +20,7 @@ In addition to the core methodology, this repository also provides scripts to si
 
 The implementation builds on the methodology introduced in the following works:
 
-1. **DeepShape II**: Wide-field radio shear measurement using deep learning *(in press; please search for latest version)*  
+1. **DeepShape II**: Source separation for radio weak-lensing measurements using deep learning *(in press; please search for latest version)*  
 2. **DeepShape**: Radio Weak Lensing Shear Measurements using Deep Learning: [Tripathi et al (2025)](https://www.aanda.org/articles/aa/full_html/2025/04/aa54072-25/aa54072-25.html)
 3. Shape measurement of radio galaxies using Equivariant CNNs: [Tripathi et al (2024)](https://ieeexplore.ieee.org/abstract/document/10715370)
 

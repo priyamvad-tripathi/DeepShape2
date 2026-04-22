@@ -1,42 +1,32 @@
 # DeepShape II  
 ## Source separation for radio weak-lensing measurements using deep learning
 
-![Python](https://img.shields.io/badge/python-3.10+-blue)
+![Python](https://img.shields.io/badge/python-3.12+-blue)
 ![License](https://img.shields.io/badge/license-TBD-lightgrey)
 
-**DeepShape II** is a wide-field extension of the original [DeepShape](https://github.com/priyamvad-tripathi/DeepShape.git) framework, providing tools for facet-based source separation, plug-and-play radio image deconvolution, deep learning-based deblending, and shape measurement, with the goal of enabling accurate and scalable weak-lensing measurements in crowded radio fields.
+**DeepShape II** is a wide-field extension of the original [DeepShape](https://github.com/priyamvad-tripathi/DeepShape.git) framework, providing tools for shape measurement of radio galaxies from noisy wide field visibility measurements.
 
----
+## Overview
 
-## Method Overview
+DeepShape II implements an end-to-end pipeline for shape measurement in wide-field radio observations, going from visibilities to final shape estimates. The framework combines:
 
-- End-to-end pipeline from visibilities to shape estimates  
 - Parallelised source isolation in the visibility domain via faceting  
 - Plug-and-play image deconvolution using a trained DRUNet denoiser  
 - VAE-based network for source separation in the image domain  
 - Equivariant CNN–based shape measurement  
 
-For full methodological details, please refer to the original paper.
 
----
-
-## Overview
-
-This repository contains:
-- Simulation pipelines for radio datasets  
-- Facet-based image reconstruction methods  
-- Deep learning models for deblending and shape measurement  
-- Scripts for applying the pipeline to real observations  
+In addition to the core methodology, this repository also provides scripts to simulate radio datasets based on the TRECS catalog.
 
 The implementation builds on the methodology introduced in the following works:
 
 1. **DeepShape II**: Wide-field radio shear measurement using deep learning *(in preparation; please search for latest version)*  
+
 2. **DeepShape**: Radio Weak Lensing Shear Measurements using Deep Learning  
-   Tripathi et al. (2025)  
-   https://www.aanda.org/articles/aa/full_html/2025/04/aa54072-25/aa54072-25.html  
+   [Tripathi et al (2024)](https://ieeexplore.ieee.org/abstract/document/10715370)
+
 3. Shape measurement of radio galaxies using Equivariant CNNs  
-   Tripathi et al. (2024)  
-   https://ieeexplore.ieee.org/abstract/document/10715370  
+  [Tripathi et al (2025)](https://www.aanda.org/articles/aa/full_html/2025/04/aa54072-25/aa54072-25.html)
 
 ---
 
@@ -89,22 +79,23 @@ This demonstrates:
 - Faceting and reconstruction  
 - Deblending  
 - Shape measurement  
-
+- Timing each part
 ---
 
-## Configuration
+# Configuration
 
-Example configuration:
+An example configuration is shown below:
 
 ```yaml
-data:
-  dataset_path: /path/to/data
 
-model:
-  weights_path: /path/to/weights
+LOCAL_DIR: /path/to/data/
 ```
+By default, the pipeline assumes the following directory structure:
 
-Main config file:
+* LOCAL_DIR/Data/ for datasets
+* LOCAL_DIR/Model_weights/ for pretrained model weights
+
+The main configuration file is located at:
 ```
 deepshape2/config/default.yaml
 ```

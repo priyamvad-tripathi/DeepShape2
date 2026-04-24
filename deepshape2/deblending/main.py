@@ -291,6 +291,9 @@ def predict(
                     out = out[0]
 
                 # Append GPU tensors
+                if inp_gpu.shape[1] == 2:
+                    inp_gpu = inp_gpu[:, :1]  # Use only the first channel if 2 exist
+
                 targets_all.append(target_gpu)
                 inputs_all.append(inp_gpu)
                 outputs_all.append(out)

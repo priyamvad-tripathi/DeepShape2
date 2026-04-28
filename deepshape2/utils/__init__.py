@@ -5,4 +5,6 @@ from .images import *
 from .io import *
 from .metrics import *
 from .misc import *
+from .models_io import load_model
+from .shape_functions import *
 from .torch_utils import *

@@ -3,7 +3,7 @@
 import torch
 import torch.nn as nn
 
-from deepshape2.utils import set_seed
+from ..utils.torch_utils import set_seed
 
 # Seed for reproducibility
 set_seed(2024)

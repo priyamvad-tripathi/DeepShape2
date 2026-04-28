@@ -5,6 +5,7 @@ import time
 import numpy as np
 import torch
 from colorist import Color
+from torch.utils.data import DataLoader, TensorDataset
 
 # from deepshape2.models.drunet import DRUNet
 from deepshape2.utils import (
@@ -17,13 +18,14 @@ from deepshape2.utils import (
     time_string,
 )
 
+__all__ = ["predict_shape"]
 # %% Load Config and Set Parameters
 cfg = load_config()
 tqdm_kwargs = get_tqdm()
 set_seed()
+
+
 # %%
-
-
 def validation_loss(model, val_loader, loss_fn, device):
     model.eval()
     val_loss_all = []
@@ -516,3 +518,60 @@ def train2(
     print("-" * 50)
 
     return best_weights, train_loss_list, val_loss_list
+
+
+# %%
+def predict_shape(
+    recon,
+    psf,
+    model,
+    device,
+    batch_size=32,
+    description=None,
+    tqdm_enabled=True,
+    weight_path=None,
+    weight_key="best_weights",
+):
+
+    recon = np.array(recon)
+    psf = np.array(psf)
+
+    images = np.stack([recon, psf], axis=1).astype(np.float32)
+
+    img_min = images.min(axis=(2, 3), keepdims=True)
+    img_max = images.max(axis=(2, 3), keepdims=True)
+    images = (images - img_min) / (img_max - img_min)
+
+    im = torch.from_numpy(images).to(torch.float32)
+
+    dataset = TensorDataset(im)
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+
+    if weight_path is not None:
+        ckpt = torch.load(weight_path, map_location=device, weights_only=False)
+        if weight_key in ckpt:
+            model.load_state_dict(ckpt[weight_key])
+        else:
+            print(
+                f"Warning: weight_key '{weight_key}' not found in checkpoint. Available keys: {list(ckpt.keys())}"
+            )
+            print("Proceeding without loading weights.")
+        model = model.eval()
+
+    ypred_all = []
+
+    with torch.inference_mode():
+        pbar = get_progress_bar(tqdm_enabled, total=len(dataloader), **tqdm_kwargs)
+        pbar.set_description(description if description else "Predicting shapes")
+
+        with pbar:
+            for im in dataloader:
+                pbar.update(1)
+                im = im[0]
+                im = im.to(device)
+                ypred = model(im)
+                ypred_all.append(ypred.cpu().detach().numpy())
+
+    ypred_all = np.concatenate(ypred_all)
+
+    return ypred_all

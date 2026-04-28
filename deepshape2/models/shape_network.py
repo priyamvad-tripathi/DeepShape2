@@ -2,7 +2,8 @@
 import torch
 from escnn import gspaces, nn
 
-from deepshape2.utils import load_config, set_seed
+from ..utils.io import load_config
+from ..utils.torch_utils import set_seed
 
 set_seed()
 cfg = load_config()

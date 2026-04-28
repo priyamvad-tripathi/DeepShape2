@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from deepinv.models import DRUNet
 from torch.fft import fft2, ifft2, ifftshift
 
-from deepshape2.utils import load_config
+from ..utils.io import load_config
 
 cfg = load_config()
 

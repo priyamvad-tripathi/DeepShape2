@@ -9,12 +9,13 @@ from astropy import units as u
 from dask import compute, delayed
 from ska_sdp_func_python.visibility import subtract_visibility
 
-from deepshape2.simulation import (
+from ..simulation.visibilities import (
     make_dirty_image_and_psf,
     predict_visibilities_from_array,
     rephase_visibility,
 )
-from deepshape2.utils import load_config, post_step
+from ..utils.io import load_config
+from ..utils.misc import post_step
 
 # Disable warnings and logging from external libraries
 warnings.warn = lambda *args, **kwargs: None

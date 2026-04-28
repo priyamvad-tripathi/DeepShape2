@@ -45,3 +45,13 @@ RESULTS_DIR: "/home/tripathi/DeepShape2/results/"
 TRECS_DIR: "/scratch/tripathi/TRECS/"
 GENCI_DIR: "/lustre/fswork/projects/rech/klu/uyt81gs/DS2/"
 RLF_DIR : "/home/tripathi/RadioLensfit2/"
+
+# Models
+MODELS:
+  deblender:
+    class: VAE
+    weights: "vae_mha.pt"
+
+  shapenet:
+    class: shapenet_full
+    weights: "shape_network_full.pt"

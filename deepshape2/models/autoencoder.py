@@ -1,8 +1,7 @@
 # %%
 import torch.nn as nn
 
-from deepshape2.utils import set_seed
-
+from ..utils.torch_utils import set_seed
 from .vae import MultiHeadSelfAttention2D as MHA
 
 # Seed for reproducibility

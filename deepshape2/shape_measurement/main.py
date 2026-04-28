@@ -8,7 +8,7 @@ from colorist import Color
 from torch.utils.data import DataLoader, TensorDataset
 
 # from deepshape2.models.drunet import DRUNet
-from deepshape2.utils import (
+from ..utils import (
     get_progress_bar,
     get_tqdm,
     load_ckp,
@@ -535,6 +535,10 @@ def predict_shape(
 
     recon = np.array(recon)
     psf = np.array(psf)
+
+    if psf.ndim == 2:
+        print("Using same PSF for all reconstructions")
+        psf = np.repeat(psf[None], recon.shape[0], axis=0)
 
     images = np.stack([recon, psf], axis=1).astype(np.float32)
 

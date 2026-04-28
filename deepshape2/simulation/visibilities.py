@@ -25,7 +25,7 @@ from ska_sdp_func_python.visibility import (
     phaserotate_visibility,
 )
 
-from deepshape2.utils import load_config
+from ..utils.io import load_config
 
 __all__ = [
     "create_visibility_template",

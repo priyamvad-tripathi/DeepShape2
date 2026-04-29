@@ -2,7 +2,13 @@
 import galsim
 import numpy as np
 
-__all__ = ["RMSE", "position_angle", "ellipticity_modulus", "convert_g_to_e"]
+__all__ = [
+    "RMSE",
+    "position_angle",
+    "ellipticity_modulus",
+    "convert_g_to_e",
+    "axisratio_pa_to_shape",
+]
 
 
 # %% Functions
@@ -33,3 +39,27 @@ def convert_g_to_e(shape_g):
         shape_e[ns] = [shear.e1, shear.e2]
 
     return shape_e
+
+
+def axisratio_pa_to_shape(a, b, pa, complement=True, rad=False):
+
+    a = np.asarray(a)
+    b = np.asarray(b)
+    pa = np.asarray(pa)
+
+    if rad:
+        pa = np.degrees(pa)
+
+    if complement:
+        pa = 90 - np.asarray(pa)
+
+    q = b / a
+
+    g = np.empty((len(q), 2))
+
+    for i, (qi, beta) in enumerate(zip(q, pa)):
+        s = galsim.Shear(q=qi, beta=beta * galsim.degrees)
+        g[i, 0] = s.e1
+        g[i, 1] = s.e2
+
+    return g

@@ -1,5 +1,8 @@
 import galsim
 import numpy as np
+from astropy.coordinates import SkyCoord
+from astropy.nddata import Cutout2D
+import astropy.units as u
 
 __all__ = [
     "extract_image",
@@ -9,6 +12,7 @@ __all__ = [
     "process_stamp",
     "centers_to_limits",
     "print_peak",
+    "extract_cutouts",
 ]
 
 # %% Image extraction functions
@@ -234,3 +238,29 @@ def print_peak(img, title="Image"):
     peak_idx = np.unravel_index(np.argmax(img), img.shape)
     print(f"Peak position of {title}: {peak_idx}, value: {img[peak_idx]:.3e}")
     return peak_idx
+
+
+# %%
+def extract_cutouts(image, w2, ra, dec, size=128):
+
+    coords = SkyCoord(ra=ra * u.deg, dec=dec * u.deg)
+    result = np.full((len(coords), size, size), np.nan, dtype=float)
+
+    for i, coord in enumerate(coords):
+        try:
+            cut = Cutout2D(
+                data=image,
+                position=coord,
+                wcs=w2,
+                size=(size, size),
+                mode="partial",
+                fill_value=np.nan,
+            )
+            result[i] = cut.data
+
+        except Exception:
+            # Only happens if coordinate is completely outside WCS
+            # In that case, we can just leave the cutout as NaNs
+            continue
+
+    return result

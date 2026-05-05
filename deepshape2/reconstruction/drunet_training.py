@@ -41,14 +41,11 @@ else:
     subset_size = 10_000
 
 
-CROP_SIZE = 128
-
-
 lr_init = 1e-4
 
 
-loc_data = DATA_DIR + "wide_set.h5"
-loc_weights = MODEL_DIR + "drunet_blended.pt"
+loc_data = DATA_DIR + "wide_set_new.h5"
+loc_weights = MODEL_DIR + "drunet_blended_new.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -68,7 +65,6 @@ train_dataset = DenoiseDataset(
     # key="isolated_stamps",
     key="blended_stamps",
     groups=group_names_train,
-    crop=CROP_SIZE,
     # min_flux=50e-06,
 )
 
@@ -78,7 +74,6 @@ val_dataset = DenoiseDataset(
     # key="isolated_stamps",
     key="blended_stamps",
     groups=group_names_val,
-    crop=CROP_SIZE,
     # min_flux=50e-06,
 )
 
@@ -412,7 +407,7 @@ def predict_denoiser(
         device=device,
     )
     ckp_iso = torch.load(
-        MODEL_DIR + "drunet_fine_tuned.pt", map_location=device, weights_only=False
+        MODEL_DIR + "drunet_blended.pt", map_location=device, weights_only=False
     )
     model2.load_state_dict(ckp_iso["best_weights"])
     model2 = model2.eval()

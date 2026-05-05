@@ -251,7 +251,8 @@ class DenoiseDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
             img = img[np.newaxis]
 
         img = torch.from_numpy(img.astype(np.float32))
-        img = CenterCrop(self.crop)(img)
+        if self.crop and (img.shape[-1] > self.crop or img.shape[-2] > self.crop):
+            img = CenterCrop(self.crop)(img)
 
         if self.transform:
             img = self.transform(img)

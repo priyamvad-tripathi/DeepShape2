@@ -163,7 +163,7 @@ def process_stamp(stamp, NPIX):
 # %% Shape measurement functions
 
 
-def _shape_galsim_single(image: np.ndarray, e1=False):
+def _shape_galsim_single(image: np.ndarray, e1=True):
     """Compute ellipticity and validity flag for a single 2D galaxy image using GalSim."""
 
     NPIX = image.shape[0]
@@ -186,8 +186,8 @@ def _shape_galsim_single(image: np.ndarray, e1=False):
             hsmparams=new_params,
         )
 
-    # Convert status → validity (1 = good, 0 = bad)
-    valid = 1 if shape.moments_status == 0 else 0
+    # Convert status → validity (True = good, False = bad)
+    valid = True if shape.moments_status == 0 else False
 
     if e1:
         return np.array([shape.observed_shape.e1, shape.observed_shape.e2]), valid
@@ -196,7 +196,7 @@ def _shape_galsim_single(image: np.ndarray, e1=False):
     return g, valid.astype(bool)
 
 
-def shape_galsim(images, e1=False):
+def shape_galsim(images, e1=True):
     """
     Compute galaxy shapes using GalSim adaptive moments.
 
@@ -204,7 +204,7 @@ def shape_galsim(images, e1=False):
     -------
     g : ndarray
     valid : ndarray or int
-        1 = good measurement, 0 = bad
+        True = good measurement, False = bad
     """
     if images.ndim > 3:
         images = np.squeeze(images)
@@ -215,7 +215,7 @@ def shape_galsim(images, e1=False):
     elif images.ndim == 3:
         n_images = images.shape[0]
         g_all = np.zeros((n_images, 2), dtype=float)
-        valid_all = np.zeros(n_images, dtype=int)
+        valid_all = np.zeros(n_images, dtype=bool)
 
         for i in range(n_images):
             g, valid = _shape_galsim_single(images[i], e1=e1)

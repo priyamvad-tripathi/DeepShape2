@@ -16,7 +16,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_mha.pt"
+loc_weights = cfg["MODEL_DIR"] + "vae_mha_new.pt"
 
 SCALE_FACTOR = cfg["SCALE_FACTOR"]
 
@@ -33,19 +33,21 @@ group_names_train, group_names_val = group_names[:45], group_names[45:50]
 
 # Split into train and validation sets
 train_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "wide_set.h5",
+    path=DATA_DIR + "wide_set_new.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_train,
     scale_fac=SCALE_FACTOR,
+    transform=None,
 )
 
 val_dataset = loaders.BlendDataset(
-    path=DATA_DIR + "wide_set.h5",
+    path=DATA_DIR + "wide_set_new.h5",
     x_key="blended_stamps",
     y_key="isolated_stamps",
     groups=group_names_val,
     scale_fac=SCALE_FACTOR,
+    transform=None,
 )
 
 # Initialize DataLoaders

@@ -8,6 +8,7 @@ __all__ = [
     "position_angle",
     "ellipticity_modulus",
     "convert_g_to_e",
+    "convert_e_to_g",
     "axisratio_pa_to_shape",
     "wrap_angle",
     "pa_delta2",
@@ -53,6 +54,18 @@ def convert_g_to_e(shape_g):
         shape_e[ns] = [shear.e1, shear.e2]
 
     return shape_e
+
+
+def convert_e_to_g(shape_e):
+    """Convert ellipticity (e1, e2) to shear (g1, g2) using galsim.Shear."""
+
+    shape_g = np.zeros_like(shape_e)
+
+    for ns, shape in enumerate(shape_e):
+        e1, e2 = shape
+        shear = galsim.Shear(e1=e1, e2=e2)
+        shape_g[ns] = [shear.g1, shear.g2]
+    return shape_g
 
 
 def axisratio_pa_to_shape(a, b, pa, complement=True, rad=False):

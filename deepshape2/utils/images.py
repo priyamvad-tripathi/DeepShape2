@@ -1,8 +1,8 @@
+import astropy.units as u
 import galsim
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.nddata import Cutout2D
-import astropy.units as u
 
 __all__ = [
     "extract_image",
@@ -161,11 +161,12 @@ def process_stamp(stamp, NPIX):
 # %% Shape measurement functions
 
 
-def _shape_galsim_single(image: np.ndarray):
-    """Compute ellipticity and moments status for a single 2D galaxy image using GalSim."""
+def _shape_galsim_single(image: np.ndarray, e1=False):
+    """Compute ellipticity and validity flag for a single 2D galaxy image using GalSim."""
 
     NPIX = image.shape[0]
     image_galsim = galsim.Image(image)
+
     try:
         shape = galsim.hsm.FindAdaptiveMom(
             image_galsim,
@@ -173,7 +174,6 @@ def _shape_galsim_single(image: np.ndarray):
             strict=False,
         )
     except galsim.errors.GalSimHSMError:
-        # Retry with relaxed parameters if initial estimation fails
         new_params = galsim.hsm.HSMParams(
             max_mom2_iter=2000, convergence_threshold=0.1, bound_correct_wt=2.0
         )
@@ -184,48 +184,43 @@ def _shape_galsim_single(image: np.ndarray):
             hsmparams=new_params,
         )
 
+    # Convert status → validity (1 = good, 0 = bad)
+    valid = 1 if shape.moments_status == 0 else 0
+
+    if e1:
+        return np.array([shape.observed_shape.e1, shape.observed_shape.e2]), valid
+
     g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
-    return g, shape.moments_status
+    return g, valid.astype(bool)
 
 
-def shape_galsim(images):
+def shape_galsim(images, e1=False):
     """
     Compute galaxy shapes using GalSim adaptive moments.
 
-    Parameters
-    ----------
-    images : numpy.ndarray
-        Input image or array of images.
     Returns
     -------
-    g : numpy.ndarray
-        Ellipticity components:
-            - Shape (2,) for a single image
-            - Shape (N, 2) for a batch
-    status : numpy.ndarray or int
-        Moment status code(s):
-            - int for a single image
-            - shape (N,) for a batch
+    g : ndarray
+    valid : ndarray or int
+        1 = good measurement, 0 = bad
     """
     if images.ndim > 3:
         images = np.squeeze(images)
 
-    # Handle single image
     if images.ndim == 2:
-        return _shape_galsim_single(images)
+        return _shape_galsim_single(images, e1=e1)
 
-    # Handle batch of images
     elif images.ndim == 3:
         n_images = images.shape[0]
         g_all = np.zeros((n_images, 2), dtype=float)
-        status_all = np.zeros(n_images, dtype=int)
+        valid_all = np.zeros(n_images, dtype=int)
 
         for i in range(n_images):
-            g, status = _shape_galsim_single(images[i])
+            g, valid = _shape_galsim_single(images[i], e1=e1)
             g_all[i] = g
-            status_all[i] = status
+            valid_all[i] = valid
 
-        return g_all, status_all
+        return g_all, valid_all
 
     else:
         raise ValueError(

@@ -161,8 +161,8 @@ class shapenet_full(torch.nn.Module):
     def __init__(
         self,
         eq_block=eq_block,
-        encoder_path=MODEL_DIR + "autoencoder_jit.pt",
-        eq_path=MODEL_DIR + "eq_block.pt",
+        encoder_path=MODEL_DIR / "autoencoder_jit.pt",
+        eq_path=MODEL_DIR / "eq_block.pt",
     ):
         super().__init__()
 

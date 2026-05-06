@@ -44,8 +44,8 @@ else:
 lr_init = 1e-4
 
 
-loc_data = DATA_DIR + "wide_set_new.h5"
-loc_weights = MODEL_DIR + "drunet_blended_new.pt"
+loc_data = DATA_DIR / "wide_set_new.h5"
+loc_weights = MODEL_DIR / "drunet_blended_new.pt"
 
 device = get_freest_gpu(set_device=True)
 set_seed()
@@ -106,7 +106,7 @@ val_loader = DataLoader(
 model = DinvDRUNet(
     in_channels=1,
     out_channels=1,
-    pretrained=MODEL_DIR + "drunet_deepinv_gray_finetune_26k.pth",
+    pretrained=MODEL_DIR / "drunet_deepinv_gray_finetune_26k.pth",
     device=device,
 )
 model = model.to(device)
@@ -403,11 +403,11 @@ def predict_denoiser(
     model2 = DinvDRUNet(
         in_channels=1,
         out_channels=1,
-        pretrained=MODEL_DIR + "drunet_deepinv_gray_finetune_26k.pth",
+        pretrained=MODEL_DIR / "drunet_deepinv_gray_finetune_26k.pth",
         device=device,
     )
     ckp_iso = torch.load(
-        MODEL_DIR + "drunet_blended.pt", map_location=device, weights_only=False
+        MODEL_DIR / "drunet_blended.pt", map_location=device, weights_only=False
     )
     model2.load_state_dict(ckp_iso["best_weights"])
     model2 = model2.eval()

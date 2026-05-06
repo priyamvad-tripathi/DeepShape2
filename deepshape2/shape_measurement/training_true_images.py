@@ -18,9 +18,9 @@ print("TQDM enabled:", TQDM_FLAG)
 DATA_DIR = cfg["DATA_DIR"]
 MODEL_DIR = cfg["MODEL_DIR"]
 
-loc_data = DATA_DIR + "wide_set.h5"
+loc_data = DATA_DIR / "wide_set.h5"
 
-loc_weights = MODEL_DIR + "shape_network_true.pt"
+loc_weights = MODEL_DIR / "shape_network_true.pt"
 keys = ["isolated_stamps"]
 model = shapenet()
 
@@ -137,4 +137,4 @@ print(
 # %% Save eq weights
 model.eval()
 model.load_state_dict(best_weights)
-torch.save(model.eq.state_dict(), MODEL_DIR + "eq_block.pt")
+torch.save(model.eq.state_dict(), MODEL_DIR / "eq_block.pt")

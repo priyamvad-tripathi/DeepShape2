@@ -35,11 +35,12 @@ model = torch.compile(model)
 cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
+MODEL_DIR = cfg["MODEL_DIR"]
 
-loc_weights = cfg["MODEL_DIR"] + "autoencoder.pt"
+loc_weights = MODEL_DIR / "autoencoder.pt"
 
 train_loader, val_loader = dataloader(
-    path=DATA_DIR + "PSF_set.h5",
+    path=DATA_DIR / "PSF_set.h5",
     x_key=["psf"],
     y_key=None,
     split=[0.8, 0.2],
@@ -364,9 +365,7 @@ predict(model, val_loader, weights=best_weights)
 
 # %% Save Model
 
-ckp = torch.load(
-    cfg["MODEL_DIR"] + "autoencoder.pt", map_location="cpu", weights_only=False
-)
+ckp = torch.load(MODEL_DIR / "autoencoder.pt", map_location="cpu", weights_only=False)
 state = ckp["best_weights"]
 
 # Remove unwanted prefixes introduced by torch.compile()
@@ -385,4 +384,4 @@ model.eval()
 
 # Convert to TorchScript and save for deployment
 scripted_model = torch.jit.script(model)
-scripted_model.save(cfg["MODEL_DIR"] + "autoencoder_jit.pt")
+scripted_model.save(MODEL_DIR / "autoencoder_jit.pt")

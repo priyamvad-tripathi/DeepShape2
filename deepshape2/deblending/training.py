@@ -16,7 +16,7 @@ DATA_DIR = cfg["DATA_DIR"]
 beta = cfg["VAE_beta"]
 lr_init = cfg["VAE_lr_init"]
 
-loc_weights = cfg["MODEL_DIR"] + "vae_mha_new.pt"
+loc_weights = cfg["MODEL_DIR"] / "vae_mha_new.pt"
 
 SCALE_FACTOR = cfg["SCALE_FACTOR"]
 

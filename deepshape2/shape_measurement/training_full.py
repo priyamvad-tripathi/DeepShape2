@@ -21,7 +21,7 @@ BSIZE = 64
 peak_factor_thresh = 1.5
 
 
-loc_weights = MODEL_DIR + "shape_network_full.pt"
+loc_weights = MODEL_DIR / "shape_network_full.pt"
 print("Weights location:", loc_weights)
 
 
@@ -33,7 +33,7 @@ set_seed()
 # %% Load Data and Model
 
 dataset = ShapeDatasetLight(
-    path=DATA_DIR + "trainset_100.h5",
+    path=DATA_DIR / "trainset_100.h5",
     peak_factor_thresh=10000,  # Very high to include all data
 )
 
@@ -128,7 +128,7 @@ print(
 )
 # %% Calculate results on test set
 
-hf_test = load_h5(DATA_DIR + "deep_set.h5", "a")["patch_000"]
+hf_test = load_h5(DATA_DIR / "deep_set.h5", "a")["patch_000"]
 
 df = hf_test["patch_df"][()]
 flux_mask = df["flux_mask"]

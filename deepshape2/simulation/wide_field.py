@@ -90,7 +90,7 @@ def random_patch(center, catalogue_type, patch_size=1.0):
     Extract a patch around a given center (cx, cy) in flat-sky coordinates.
     Returns the galaxies in the patch and RA/Dec of the patch center.
     """
-    catalogue = pd.read_pickle(f"{TRECS_DIR}/catalog_{catalogue_type}.pkl")
+    catalogue = pd.read_pickle({TRECS_DIR} / f"catalog_{catalogue_type}.pkl")
 
     cx, cy = center
     x0, y0 = cx - patch_size / 2, cy - patch_size / 2

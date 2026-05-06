@@ -1,5 +1,6 @@
 import os
 import pickle
+from importlib.resources import files
 from pathlib import Path
 
 import h5py
@@ -8,7 +9,7 @@ import pandas as pd
 from colorist import Color
 from omegaconf import OmegaConf
 
-_all__ = [
+__all__ = [
     "load",
     "save",
     "load_h5",
@@ -17,33 +18,35 @@ _all__ = [
     "print_h5",
 ]
 
+OmegaConf.register_new_resolver("path", Path, replace=True)
 
 # Compute path relative to this file's directory
-DEFAULT_CONFIG_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)),  # up one level from utils/
-    "config",
-    "default.yaml",
-)
+# DEFAULT_CONFIG_PATH = os.path.join(
+#     os.path.dirname(os.path.dirname(__file__)),  # up one level from utils/
+#     "config",
+#     "default.yaml",
+# )
+DEFAULT_CONFIG_PATH = files("deepshape2.config").joinpath("default.yaml")
 
 
 def load_config(path: str = None):
-    """
-    Load YAML config. Falls back to default if no path is provided.
-    """
+    OmegaConf.register_new_resolver("path", Path, replace=True)
+
     cfg_path = path or DEFAULT_CONFIG_PATH
     cfg = OmegaConf.load(cfg_path)
 
     run_env = os.getenv("RUN_ENV", "local")
 
     if run_env == "genci":
-        base = cfg["GENCI_DIR"]
+        base = cfg["GENCI_DIR"]  # already a Path via resolver
         cfg["TQDM"] = False
     else:
-        base = cfg["LOCAL_DIR"]
+        base = cfg["LOCAL_DIR"]  # already a Path via resolver
         cfg["TQDM"] = True
 
-    cfg["DATA_DIR"] = base + "Data/"
-    cfg["MODEL_DIR"] = base + "Model_weights/"
+    # Use / operator since base is now a Path
+    cfg["DATA_DIR"] = base / "Data"
+    cfg["MODEL_DIR"] = base / "Model_weights"
 
     return cfg
 

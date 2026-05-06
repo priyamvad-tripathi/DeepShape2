@@ -20,6 +20,7 @@ def load_model(
     device: torch.device | str,
     verbose: bool = True,
     weights_key: str = "best_weights",
+    path: str | Path | None = None,
 ) -> nn.Module:
     """
     Load a registered model by name from the config.
@@ -30,6 +31,7 @@ def load_model(
         verbose:     Print loading info.
         weights_key: Key to extract from checkpoint dict. Falls back to
                      the full checkpoint if the key is absent.
+        path:        Optional custom path to weights file.
 
     Returns:
         Model loaded with weights, moved to device, in eval mode.
@@ -54,7 +56,26 @@ def load_model(
             f"Available: {list(MODEL_REGISTRY.keys())}"
         )
 
-    weights_path = Path(cfg["MODEL_DIR"]) / model_cfg["weights"]
+    default_weights_path = Path(cfg["MODEL_DIR"]) / model_cfg["weights"]
+
+    # NEW: handle optional custom path
+    if path is not None:
+        custom_path = Path(path)
+        if custom_path.exists():
+            weights_path = custom_path
+            if verbose:
+                print(f"Using provided weights path: {Color.GREEN}{weights_path}{Color.OFF}")
+        else:
+            weights_path = default_weights_path
+            if verbose:
+                print(
+                    f"Provided path does not exist: {custom_path}. "
+                    f"Falling back to default: {Color.GREEN}{weights_path}{Color.OFF}"
+                )
+    else:
+        weights_path = default_weights_path
+
+
     if not weights_path.exists():
         raise FileNotFoundError(f"Weights file not found: {weights_path}")
 

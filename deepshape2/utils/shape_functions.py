@@ -1,6 +1,7 @@
 # %%
 import galsim
 import numpy as np
+from astropy.stats import circmean, circstd, rayleightest
 
 __all__ = [
     "RMSE",
@@ -8,6 +9,9 @@ __all__ = [
     "ellipticity_modulus",
     "convert_g_to_e",
     "axisratio_pa_to_shape",
+    "wrap_angle",
+    "pa_delta2",
+    "compute_circular_stats",
 ]
 
 
@@ -17,15 +21,25 @@ def RMSE(ypred, ytrue):
 
 
 def position_angle(y):
+    y = np.asarray(y)
+
+    if y.ndim == 1:  # single shape (2,)
+        e1, e2 = y
+        return 0.5 * np.arctan2(e2, e1)
+
+    # multiple shapes (N, 2)
     e1 = y[:, 0]
     e2 = y[:, 1]
-    alpha = 0.5 * np.arctan2(e2, e1)
-    return alpha
+    return 0.5 * np.arctan2(e2, e1)
 
 
-def ellipticity_modulus(y):
+def ellipticity_modulus(shape):
     """Compute ellipticity magnitude"""
-    return np.sqrt(y[:, 0] ** 2 + y[:, 1] ** 2)
+
+    shape = np.asarray(shape)
+    if shape.ndim == 1:  # single shape (2,)
+        return np.sqrt(shape[0] ** 2 + shape[1] ** 2)
+    return np.sqrt(np.sum(shape**2, axis=1))
 
 
 def convert_g_to_e(shape_g):
@@ -63,3 +77,87 @@ def axisratio_pa_to_shape(a, b, pa, complement=True, rad=False):
         g[i, 1] = s.e2
 
     return g
+
+
+def wrap_angle(x, period="half"):
+    """
+    Wrap angles (radians) to a symmetric interval.
+
+    Parameters
+    ----------
+    x : array-like
+        Input angles in radians.
+    period : {'half', 'full'} or float
+        - 'half' → wrap to [-pi/2, pi/2)
+        - 'full' → wrap to [-pi, pi)
+        - float  → custom period P, wraps to [-P/2, P/2)
+
+    Returns
+    -------
+    ndarray
+        Wrapped angles.
+    """
+    x = np.asarray(x, dtype=float)
+
+    if period == "half":
+        P = np.pi
+    elif period == "full":
+        P = 2 * np.pi
+    elif np.isscalar(period):
+        P = float(period)
+    else:
+        raise ValueError("period must be 'half', 'full', or a float")
+
+    return (x + P / 2) % P - P / 2
+
+
+def pa_delta2(pa_method, pa_ref):
+    """
+    Compute residuals between two PA arrays (radians).
+    Wraps inputs to [-pi/2, pi/2) first, doubles, then wraps difference.
+    Returns delta2 in radians, in [-pi, pi).
+    """
+    pa_method = wrap_angle(pa_method, period="half")
+    pa_ref = wrap_angle(pa_ref, period="half")
+    return wrap_angle(2.0 * pa_method - 2.0 * pa_ref, period="full")
+
+
+def compute_circular_stats(pa_method, pa_ref):
+    """
+    Full circular statistics for a paired PA comparison (spin-2).
+
+    Parameters
+    ----------
+    pa_method, pa_ref : arrays of PA in radians, [-pi/2, pi/2)
+
+    Returns
+    -------
+    dict with:
+        R            : mean resultant length [0, 1]
+        mean_offset  : circular mean of residuals in degrees
+        circ_std     : circular std of residuals in degrees
+        rayleigh_p   : Rayleigh test p-value (H0: uniform distribution)
+        delta_deg    : per-source residuals in degrees, for plotting
+        n            : sample size
+    """
+    delta2 = pa_delta2(pa_method, pa_ref)
+
+    circ_mean_2 = circmean(delta2)
+    circ_std_2 = circstd(delta2)
+
+    mean_offset_deg = np.rad2deg(circ_mean_2) / 2.0
+    circ_std_deg = np.rad2deg(circ_std_2) / 2.0
+
+    R = np.abs(np.mean(np.exp(1j * np.asarray(delta2))))
+    n = len(delta2)
+
+    rayleigh_p = rayleightest(delta2)
+
+    return dict(
+        R=R,
+        mean_offset=mean_offset_deg,
+        circ_std=circ_std_deg,
+        rayleigh_p=rayleigh_p,
+        delta_deg=np.rad2deg(delta2) / 2.0,
+        n=n,
+    )

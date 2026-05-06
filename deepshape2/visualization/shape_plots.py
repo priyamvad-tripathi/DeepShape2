@@ -11,7 +11,7 @@ from deepshape2.visualization.base import savefig, set_style
 
 set_style()
 
-__all__ = ["plot_bias", "contour_plot", "plot_residual_slope"]
+__all__ = ["plot_bias", "contour_plot", "plot_residual_slope", "plot_histogram"]
 
 
 # %%
@@ -271,3 +271,130 @@ def plot_residual_slope(
 
     fig.tight_layout()
     savefig(fname)
+
+
+# %%
+def plot_histogram(
+    shape_mod_rad,
+    shape_mod_opt,
+    pa_rad,
+    pa_opt,
+    bins=30,
+    suptitle=None,
+    xlabel="Radio",
+    ylabel="Optical",
+    psf_mod=None,
+    psf_pa=None,
+    wrap=True,
+):
+
+    def wrap_pa_deg(pa_deg):
+        return np.mod(pa_deg, 180.0)
+
+    # --- validation ---
+    shapes = [
+        np.shape(shape_mod_rad),
+        np.shape(shape_mod_opt),
+        np.shape(pa_rad),
+        np.shape(pa_opt),
+    ]
+
+    if len(set(shapes)) != 1:
+        raise ValueError(
+            f"All inputs must have identical shapes, got:\n"
+            f"shape_mod_rad={np.shape(shape_mod_rad)}, "
+            f"shape_mod_opt={np.shape(shape_mod_opt)}, "
+            f"pa_rad={np.shape(pa_rad)}, "
+            f"pa_opt={np.shape(pa_opt)}"
+        )
+
+    if (psf_mod is None) ^ (psf_pa is None):
+        raise ValueError("psf_mod and psf_pa must be provided together or both be None")
+
+    # --- figure setup ---
+    fig, ax = plt.subplots(1, 2, figsize=(9, 4), constrained_layout=True)
+
+    cmap = plt.cm.viridis.copy()
+
+    mag_ticks = [0, 0.2, 0.4, 0.6, 0.8, 1.0]
+    ang_ticks = [-90, -45, 0, 45, 90]
+
+    # --- modulus comparison ---
+    h1 = ax[0].hist2d(
+        shape_mod_rad,
+        shape_mod_opt,
+        bins=bins,
+        range=[[0, 1], [0, 1]],
+        cmap=cmap,
+    )
+
+    ax[0].plot([0, 1], [0, 1], "r--", lw=1)
+
+    ax[0].set_xlim(0, 1)
+    ax[0].set_ylim(0, 1)
+    ax[0].set_aspect("equal")
+
+    ax[0].set_xticks(mag_ticks)
+    ax[0].set_yticks(mag_ticks)
+
+    ax[0].set_xlabel(xlabel)
+    ax[0].set_ylabel(ylabel)
+    ax[0].set_title("Magnitude comparison")
+
+    fig.colorbar(h1[3], ax=ax[0], fraction=0.05, pad=0.02)
+
+    # --- PA comparison ---
+    pa_rad_deg = np.rad2deg(pa_rad)
+    pa_opt_deg = np.rad2deg(pa_opt)
+
+    offset = 0
+    if wrap:
+        pa_rad_deg = wrap_pa_deg(pa_rad_deg)
+        pa_opt_deg = wrap_pa_deg(pa_opt_deg)
+        offset = 90
+        ang_ticks = [tk + offset for tk in ang_ticks]
+
+    h2 = ax[1].hist2d(
+        pa_rad_deg,
+        pa_opt_deg,
+        bins=bins,
+        range=[[-90 + offset, 90 + offset], [-90 + offset, 90 + offset]],
+        cmap=cmap,
+    )
+
+    ax[1].plot([-90 + offset, 90 + offset], [-90 + offset, 90 + offset], "r--", lw=1)
+
+    ax[1].set_xlim(-90 + offset, 90 + offset)
+    ax[1].set_ylim(-90 + offset, 90 + offset)
+    ax[1].set_aspect("equal")
+
+    ax[1].set_xticks(ang_ticks)
+    ax[1].set_yticks(ang_ticks)
+
+    ax[1].set_xlabel(xlabel)
+    ax[1].set_title("PA comparison")
+
+    fig.colorbar(h2[3], ax=ax[1], fraction=0.05, pad=0.02)
+
+    # --- PSF marker ---
+    if psf_mod is not None:
+        psf_pa = np.rad2deg(psf_pa)
+        if wrap:
+            psf_pa = wrap_pa_deg(psf_pa)
+        for axis, x, y in [
+            (ax[0], psf_mod, psf_mod),
+            (ax[1], psf_pa, psf_pa),
+        ]:
+            axis.scatter(
+                x,
+                y,
+                marker="x",
+                s=180,
+                facecolors="white",
+                linewidths=2.5,
+                zorder=6,
+            )
+    if suptitle is not None:
+        fig.suptitle(suptitle)
+
+    plt.show()

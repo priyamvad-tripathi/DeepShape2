@@ -195,7 +195,9 @@ def compute_pixel_coordinates(patch, patch_center_flat, NPIX_SKY=NPIX_SKY):
     return patch_out, patch_center_ra_dec
 
 
-def _simulate_galaxy(row, simple=False, min_flux=10e-6, npix_stamp=NPIX_STAMP):
+def _simulate_galaxy(
+    row, simple=False, min_flux=10e-6, npix_stamp=NPIX_STAMP, scale=SCALE_ARCSEC
+):
     flux = row["flux"]
     scale_length = row["size"]
     e1 = row["e1"]
@@ -213,12 +215,12 @@ def _simulate_galaxy(row, simple=False, min_flux=10e-6, npix_stamp=NPIX_STAMP):
         n=sersic_index, half_light_radius=hlr, gsparams=big_fft_params, flux=flux
     )
 
-    e_tot = galsim.Shear(g1=e1, g2=e2)
+    e_tot = galsim.Shear(e1=e1, e2=e2)
     gal_true = gal.shear(e_tot)
 
-    nx = gal_true.getGoodImageSize(pixel_scale=SCALE_ARCSEC)
+    nx = gal_true.getGoodImageSize(pixel_scale=scale)
     bounds = galsim.BoundsI(0, nx - 1, 0, nx - 1)
-    stamp = galsim.ImageF(bounds, scale=SCALE_ARCSEC)
+    stamp = galsim.ImageF(bounds, scale=scale)
 
     gal_true.drawImage(stamp, center=galsim.PositionI(nx // 2, nx // 2))
     stamp.replaceNegative(replace_value=0)

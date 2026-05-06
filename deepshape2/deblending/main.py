@@ -26,7 +26,10 @@ tqdm_kwargs = get_tqdm()
 
 __all__ = ["train", "predict", "plot_bad_cases", "predict_multiple"]
 
-SCALE_FACTOR = load_config().get("SCALE_FACTOR", 5e7)
+
+cfg = load_config()
+SCALE_FACTOR = cfg.get("SCALE_FACTOR", 5e7)
+TQDM_FLAG = cfg["TQDM"]
 
 
 # %% Training Function
@@ -59,7 +62,6 @@ def train(
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
-    tqdm_enabled = kwargs.get("tqdm_enabled", True)
     tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
 
     scheduler = None
@@ -102,7 +104,7 @@ def train(
             new_lr = current_lr < lr_list[-1]
             lr_list.append(current_lr)
 
-        pbar = get_progress_bar(tqdm_enabled, total=len(train_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
         with pbar:
@@ -154,7 +156,7 @@ def train(
             kl_loss_list.append(epoch_kl)
 
             # Print updates if tqdm disabled
-            if not tqdm_enabled:
+            if not TQDM_FLAG:
                 line0 = f"Epoch {epoch + 1}/{epochs}"
                 if current_lr is not None:
                     line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
@@ -183,19 +185,21 @@ def train(
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Recon Loss": f"{epoch_recon:.{precision}e}",
                     "KL Loss": f"{epoch_kl:.{precision}e}",
-                    "Val Loss": f"{Color.RED}{-val_loss:.3f} dB{Color.OFF}"
-                    if is_best
-                    else f"{-val_loss:.3f} dB",
+                    "Val Loss": (
+                        f"{Color.RED}{-val_loss:.3f} dB{Color.OFF}"
+                        if is_best
+                        else f"{-val_loss:.3f} dB"
+                    ),
                 }
                 pbar.set_postfix(pfix)
 
-                if not tqdm_enabled:
+                if not TQDM_FLAG:
                     marker = "BEST" if is_best else ""
                     line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
-            if not tqdm_enabled:
+            if not TQDM_FLAG:
                 print(line)
                 print("-" * 50)
 
@@ -266,7 +270,6 @@ def predict(
     scale_fac=SCALE_FACTOR,
     print_stats=True,
     n=5,
-    tqdm_enabled=True,
 ):
     if weights is not None:
         model.load_state_dict(weights)
@@ -277,7 +280,7 @@ def predict(
     psnr_out_all, psnr_in_all = [], []
 
     with torch.inference_mode():
-        pbar = get_progress_bar(tqdm_enabled, total=len(val_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(TQDM_FLAG, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:
             for inp, target in val_loader:

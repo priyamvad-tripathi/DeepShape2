@@ -49,7 +49,7 @@ def parse_args():
 cfg = load_config()
 
 DATA_DIR = cfg["DATA_DIR"]
-NPIX_STAMP = 256
+NPIX_STAMP = 128
 
 """
 Other default parameters are set in simulation/wide_field.py
@@ -63,7 +63,7 @@ if __name__ == "__main__":
     NUM_PATCHES = args.n_patches
     MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
 
-    data = load_h5(DATA_DIR + "wide_set.h5", mode="a", delete_if_exists=True)
+    data = load_h5(DATA_DIR + "wide_set_new.h5", mode="a", delete_if_exists=True)
     # data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
     start = time.time()
@@ -94,7 +94,7 @@ if __name__ == "__main__":
             group = data.create_group(f"patch_{nl + 1:03d}")
 
             # Extract galaxies at patch location
-            patch = random_patch(location)
+            patch = random_patch(location, catalogue_type="wide")
             patch = filter_patch_by_size(filter_patch_by_flux(patch))
             patch, centre = compute_pixel_coordinates(patch, location)
 
@@ -102,7 +102,7 @@ if __name__ == "__main__":
 
             # Simulate wide-field image of the patch
             sky_array, patch_out, isolated_stamps = simulate_wide_field(
-                patch, min_flux=MIN_FLUX
+                patch, min_flux=MIN_FLUX, npix_stamp=NPIX_STAMP,
             )
 
             galaxy_locations = patch_out[["pix_x", "pix_y"]].values
@@ -118,18 +118,17 @@ if __name__ == "__main__":
 
             # Save results
             patch_rec = patch_out.to_records(index=False)
-            group.create_dataset("patch_df", data=patch_rec, compression="gzip")
+            group.create_dataset("patch_df", data=patch_rec)
 
             group.create_dataset(
-                "sky", data=sky_array, compression="gzip", chunks=(1024, 1024)
+                "sky", data=sky_array, chunks=(1024, 1024)
             )
             group.attrs["centre"] = centre
 
             group.create_dataset(
                 "isolated_stamps",
                 data=isolated_stamps,
-                compression="gzip",
-                chunks=(1, 256, 256),
+                chunks=(1, NPIX_STAMP, NPIX_STAMP),
             )
 
             post_step("field image simulation", start, client, data)
@@ -159,8 +158,7 @@ if __name__ == "__main__":
             group.create_dataset(
                 "blended_stamps",
                 data=blended_stamps,
-                compression="gzip",
-                chunks=(1, 256, 256),
+                chunks=(1, NPIX_STAMP, NPIX_STAMP),
             )
 
             post_step("blended stamp extraction", start, client, data)

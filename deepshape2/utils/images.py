@@ -3,6 +3,7 @@ import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.nddata import Cutout2D
 import astropy.units as u
+from numpy.fft import ifftshift, irfftn, rfftn
 
 __all__ = [
     "extract_image",
@@ -13,6 +14,7 @@ __all__ = [
     "centers_to_limits",
     "print_peak",
     "extract_cutouts",
+    "calculate_dirty_peak",
 ]
 
 # %% Image extraction functions
@@ -264,3 +266,33 @@ def extract_cutouts(image, w2, ra, dec, size=128):
             continue
 
     return result
+
+
+def calculate_dirty_peak(img, psf):
+    """Calculate the peak value of corresponding dirty image"""
+
+    # ---- Normalize shapes ----
+    single = False
+    if img.ndim == 2:
+        img = img[None, ...]
+        single = True
+
+    if psf.ndim == 2:
+        psf = psf[None, ...]  # broadcast later
+
+    # ---- Broadcast PSF if needed ----
+    if psf.shape[0] == 1 and img.shape[0] > 1:
+        psf = np.repeat(psf, img.shape[0], axis=0)
+
+    if psf.shape != img.shape:
+        raise ValueError(f"Incompatible shapes: img {img.shape}, psf {psf.shape}")
+
+    # ---- FFTs ----
+    img_f = rfftn(img, axes=(-2, -1))
+    psf_f = rfftn(ifftshift(psf, axes=(-2, -1)), axes=(-2, -1))
+
+    dirty = irfftn(img_f * psf_f, s=img.shape[-2:], axes=(-2, -1))
+
+    peaks = dirty.max(axis=(-2, -1)).astype(np.float32)
+
+    return peaks[0] if single else peaks

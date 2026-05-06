@@ -9,7 +9,7 @@ from dask import compute, delayed
 from dask.distributed import Client, LocalCluster
 
 from deepshape2.simulation import make_dirty_image_and_psf, simulate_visibilities
-from deepshape2.utils import extract_image, load_config, load_h5, post_step
+from deepshape2.utils import load_config, load_h5, post_step
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -17,7 +17,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 cfg = load_config()
 DATA_DIR = cfg["DATA_DIR"]
 
-hf_path = DATA_DIR + "deep_set.h5"
+hf_path = DATA_DIR + "deep_set_new.h5"
 
 NPIX_SKY = cfg["NPIX_SKY"]
 SCALE_RADIANS = cfg["SCALE_RADIANS"]
@@ -32,7 +32,7 @@ if __name__ == "__main__":
     hf = load_h5(hf_path, "a", delete_if_exists=False)
     patch_group = hf["patch_000"]
 
-    isolated_stamps = extract_image(patch_group["isolated_stamps"][:])
+    isolated_stamps = patch_group["isolated_stamps"][:]
     patch_df = patch_group["patch_df"][()]
     patch_ra, patch_dec = patch_group.attrs["centre"]
 

@@ -49,7 +49,6 @@ RESULTS_DIR: "${path:/home/tripathi/DeepShape2/results/}"
 TRECS_DIR:  "${path:/scratch/tripathi/TRECS/}"
 GENCI_DIR:  "${path:/lustre/fswork/projects/rech/klu/uyt81gs/DS2/}"
 RLF_DIR:    "${path:/home/tripathi/RadioLensfit2/}"
-ELAIS_DIR:  "${path:/scratch/tripathi/ELAIS/}"
 
 # Models
 MODELS:

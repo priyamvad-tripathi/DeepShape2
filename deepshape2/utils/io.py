@@ -47,6 +47,7 @@ def load_config(path: str = None):
     # Use / operator since base is now a Path
     cfg["DATA_DIR"] = base / "Data"
     cfg["MODEL_DIR"] = base / "Model_weights"
+    cfg["ELAIS_DIR"] = base / "ELAIS"
 
     return cfg
 

@@ -63,7 +63,7 @@ if __name__ == "__main__":
     NUM_PATCHES = args.n_patches
     MIN_FLUX = 10e-6  # Min flux in Jy for extracting stamps
 
-    data = load_h5(DATA_DIR + "wide_set_new.h5", mode="a", delete_if_exists=True)
+    data = load_h5(DATA_DIR / "wide_set_new.h5", mode="a", delete_if_exists=True)
     # data.attrs["min_flux_for_stamps"] = MIN_FLUX
 
     start = time.time()
@@ -86,7 +86,6 @@ if __name__ == "__main__":
                 f"{Color.GREEN}Simulating patch {nl + 1}/{NUM_PATCHES} at location ({location[0]:.3f}, {location[1]:.3f}){Color.OFF}"
             )
 
-
             if f"patch_{nl + 1:03d}" in data:
                 print(f"Patch {nl + 1} already exists. Skipping...")
                 continue
@@ -102,7 +101,9 @@ if __name__ == "__main__":
 
             # Simulate wide-field image of the patch
             sky_array, patch_out, isolated_stamps = simulate_wide_field(
-                patch, min_flux=MIN_FLUX, npix_stamp=NPIX_STAMP,
+                patch,
+                min_flux=MIN_FLUX,
+                npix_stamp=NPIX_STAMP,
             )
 
             galaxy_locations = patch_out[["pix_x", "pix_y"]].values
@@ -120,9 +121,7 @@ if __name__ == "__main__":
             patch_rec = patch_out.to_records(index=False)
             group.create_dataset("patch_df", data=patch_rec)
 
-            group.create_dataset(
-                "sky", data=sky_array, chunks=(1024, 1024)
-            )
+            group.create_dataset("sky", data=sky_array, chunks=(1024, 1024))
             group.attrs["centre"] = centre
 
             group.create_dataset(

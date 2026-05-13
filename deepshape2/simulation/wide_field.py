@@ -6,11 +6,12 @@ import galsim
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
+import dask.array as da
 
 # from astropy.wcs import WCS
 from dask import compute, delayed
 
-from deepshape2.utils import load_config, process_stamp
+from ..utils import load_config, process_stamp
 
 warnings.filterwarnings("ignore", category=UserWarning)
 
@@ -85,12 +86,12 @@ def generate_patch_locations(
     return chosen_centers
 
 
-def random_patch(center, catalogue_type, patch_size=1.0):
+def random_patch(center, catalogue_type, scale=SCALE_DEGREES, patch_size=1.0):
     """
     Extract a patch around a given center (cx, cy) in flat-sky coordinates.
     Returns the galaxies in the patch and RA/Dec of the patch center.
     """
-    catalogue = pd.read_pickle({TRECS_DIR} / f"catalog_{catalogue_type}.pkl")
+    catalogue = pd.read_pickle(TRECS_DIR / f"catalog_{catalogue_type}.pkl")
 
     cx, cy = center
     x0, y0 = cx - patch_size / 2, cy - patch_size / 2
@@ -105,7 +106,7 @@ def random_patch(center, catalogue_type, patch_size=1.0):
     ].copy()
 
     # Drop galaxies too close to patch edge
-    margin = SCALE_DEGREES * 130
+    margin = scale * 130
     mask = (
         (patch["x"] - margin >= x0)
         & (patch["x"] + margin <= x1)
@@ -149,7 +150,9 @@ def filter_patch_by_size(
 # %% Wide-field Simulation Functions
 
 
-def compute_pixel_coordinates(patch, patch_center_flat, NPIX_SKY=NPIX_SKY):
+def compute_pixel_coordinates(
+    patch, patch_center_flat, scale=SCALE_DEGREES, NPIX_SKY=NPIX_SKY
+):
     """
     Compute pixel positions and RA/Dec of galaxies relative to patch center.
 
@@ -173,8 +176,8 @@ def compute_pixel_coordinates(patch, patch_center_flat, NPIX_SKY=NPIX_SKY):
     patch_out = patch.copy()
 
     # Offsets in pixels relative to patch center
-    dx = ((patch_out["x"] - cx) / SCALE_DEGREES).astype(int)
-    dy = ((patch_out["y"] - cy) / SCALE_DEGREES).astype(int)
+    dx = ((patch_out["x"] - cx) / scale).astype(int)
+    dy = ((patch_out["y"] - cy) / scale).astype(int)
 
     # Pixel coordinates
     patch_out["pix_x"] = dx + NPIX_SKY // 2
@@ -219,6 +222,7 @@ def _simulate_galaxy(
     gal_true = gal.shear(e_tot)
 
     nx = gal_true.getGoodImageSize(pixel_scale=scale)
+    nx = min(nx, 16384)  # limit to avoid memory issues with very large galaxies
     bounds = galsim.BoundsI(0, nx - 1, 0, nx - 1)
     stamp = galsim.ImageF(bounds, scale=scale)
 
@@ -238,10 +242,12 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     simple = kwargs.get("simple", False)
     min_flux = kwargs.get("min_flux", 10e-6)
     npix_stamp = kwargs.get("npix_stamp", NPIX_STAMP)
+    scale = kwargs.get("scale", SCALE_ARCSEC)
+    stamps_only = kwargs.get("stamps_only", False)
 
     # Step 1: Initialize wide-field image
     bounds = galsim.BoundsI(0, NPIX_SKY - 1, 0, NPIX_SKY - 1)
-    field = galsim.ImageF(bounds, scale=SCALE_ARCSEC)
+    field = galsim.ImageF(bounds, scale=scale)
 
     if verbosity > 0:
         print(
@@ -255,10 +261,16 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
         )
 
     # Step 2: Run dask to simulate galaxies in parallel
-    def simulate_batch(batch, simple=simple, min_flux=min_flux, npix_stamp=npix_stamp):
+    def simulate_batch(
+        batch, simple=simple, min_flux=min_flux, npix_stamp=npix_stamp, scale=scale
+    ):
         return [
             _simulate_galaxy(
-                row, simple=simple, min_flux=min_flux, npix_stamp=npix_stamp
+                row,
+                simple=simple,
+                min_flux=min_flux,
+                npix_stamp=npix_stamp,
+                scale=scale,
             )
             for row in batch
         ]
@@ -266,14 +278,15 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     cols = ["flux", "size", "e1", "e2"]
     rows = patch[cols].to_dict(orient="records")
 
-    # chunk rows into groups of 100
-    chunk_size = 100
+    # chunk rows into groups of 250
+    chunk_size = 128
     tasks = [
         delayed(simulate_batch)(
             rows[i : i + chunk_size],
             simple=simple,
             min_flux=min_flux,
             npix_stamp=npix_stamp,
+            scale=scale,
         )
         for i in range(0, len(rows), chunk_size)
     ]
@@ -282,12 +295,13 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     results = compute(*tasks)
     results = [r for batch in results for r in batch]
 
-    # Extract sersic indexes
-    patch["sersic_index"] = np.stack([r[1] for r in results])
+    if not stamps_only:
+        # Extract sersic indexes
+        patch["sersic_index"] = np.stack([r[1] for r in results])
+        # Extract isolated stamps and corresponding flux mask
+        mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
+        patch["flux_mask"] = mask
 
-    # Extract isolated stamps and corresponding flux mask
-    mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
-    patch["flux_mask"] = mask
     isolated_stamps = np.stack(
         [row[-1] for row in results if isinstance(row[-1], np.ndarray)]
     )
@@ -315,5 +329,23 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
         field[bounds] += stamp_img[bounds]
 
     sky_array = field.array.copy()
+
+    if stamps_only:
+
+        # Blended stamps — dask crops from sky, only for bright sources
+        bright_mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
+        bright_cx = patch["pix_x"][bright_mask].values
+        bright_cy = patch["pix_y"][bright_mask].values
+
+        half = npix_stamp // 2
+        darr = da.from_array(sky_array, chunks=(5000, 5000))
+
+        crops = [
+            darr[cy - half : cy + half, cx - half : cx + half]
+            for cx, cy in zip(bright_cx, bright_cy)
+        ]
+        blended_stamps = np.stack(da.compute(*crops))
+
+        return isolated_stamps, blended_stamps
 
     return sky_array, patch, isolated_stamps

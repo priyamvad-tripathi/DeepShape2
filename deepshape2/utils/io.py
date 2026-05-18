@@ -45,8 +45,9 @@ def load_config(path: str = None):
         cfg["TQDM"] = True
 
     # Use / operator since base is now a Path
-    cfg["DATA_DIR"] = base / "Data"
-    cfg["MODEL_DIR"] = base / "Model_weights"
+    dir_ds2 = base / "DS2"
+    cfg["DATA_DIR"] = dir_ds2 / "Data"
+    cfg["MODEL_DIR"] = dir_ds2 / "Model_weights"
     cfg["ELAIS_DIR"] = base / "ELAIS"
 
     return cfg

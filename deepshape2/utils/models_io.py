@@ -64,7 +64,9 @@ def load_model(
         if custom_path.exists():
             weights_path = custom_path
             if verbose:
-                print(f"Using provided weights path: {Color.GREEN}{weights_path}{Color.OFF}")
+                print(
+                    f"Using provided weights path: {Color.GREEN}{weights_path}{Color.OFF}"
+                )
         else:
             weights_path = default_weights_path
             if verbose:
@@ -74,15 +76,13 @@ def load_model(
                 )
     else:
         weights_path = default_weights_path
+        if verbose:
+            print(
+                f"Loading {name} ({class_name}) from {Color.GREEN}{weights_path}{Color.OFF} (Default path)"
+            )
 
-
-    if not weights_path.exists():
-        raise FileNotFoundError(f"Weights file not found: {weights_path}")
-
-    if verbose:
-        print(
-            f"Loading {name} ({class_name}) from {Color.GREEN}{weights_path}{Color.OFF}"
-        )
+        if not default_weights_path.exists():
+            raise FileNotFoundError(f"Default weights file not found: {weights_path}")
 
     checkpoint = torch.load(weights_path, map_location="cpu", weights_only=True)
 

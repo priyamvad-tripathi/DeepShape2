@@ -44,10 +44,10 @@ tqdm:
   unit: "batch"
   
 # Paths
-LOCAL_DIR:  "${path:/scratch/tripathi/DS2/}"
+LOCAL_DIR:  "${path:/scratch/tripathi/}"
 RESULTS_DIR: "${path:/home/tripathi/DeepShape2/results/}"
 TRECS_DIR:  "${path:/scratch/tripathi/TRECS/}"
-GENCI_DIR:  "${path:/lustre/fswork/projects/rech/klu/uyt81gs/DS2/}"
+GENCI_DIR:  "${path:/lustre/fswork/projects/rech/klu/uyt81gs/}"
 RLF_DIR:    "${path:/home/tripathi/RadioLensfit2/}"
 
 # Models

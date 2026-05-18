@@ -263,6 +263,38 @@ class DenoiseDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
         self._cleanup_h5()
 
 
+class StampDatasetSingle(Dataset):
+    def __init__(self, path, key="blended_stamps"):
+        self.path = path
+        self.key = key
+        self._hf = None
+
+        with h5py.File(self.path, "r") as hf:
+            self.length = len(hf[self.key])
+
+    def _get_h5(self):
+        if self._hf is None:
+            self._hf = h5py.File(self.path, "r")
+        return self._hf
+
+    def __len__(self):
+        return self.length
+
+    def __getitem__(self, idx):
+        hf = self._get_h5()
+
+        img = np.array(hf[self.key][idx], dtype=np.float32)
+
+        if img.ndim == 2:
+            img = img[np.newaxis]
+
+        return torch.from_numpy(img)
+
+    def __del__(self):
+        if self._hf is not None:
+            self._hf.close()
+
+
 # %% Shape Measurement Loader
 class ShapeDataset(Dataset, HDF5WorkerMixin, MultiGroupIndexMixin):
     def __init__(

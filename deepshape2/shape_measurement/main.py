@@ -521,6 +521,13 @@ def train2(
 
 
 # %%
+def _to_tensor(x, dtype=torch.float32):
+    """Convert numpy array, list, or tensor to a torch tensor."""
+    if isinstance(x, torch.Tensor):
+        return x.to(dtype)
+    return torch.tensor(np.asarray(x), dtype=dtype)
+
+
 def predict_shape(
     recon,
     psf,
@@ -532,23 +539,21 @@ def predict_shape(
     weight_path=None,
     weight_key="best_weights",
 ):
-
-    recon = np.array(recon)
-    psf = np.array(psf)
+    recon = _to_tensor(recon)  # (N, H, W)
+    psf = _to_tensor(psf)  # (H, W) or (N, H, W)
 
     if psf.ndim == 2:
         print("Using same PSF for all reconstructions")
-        psf = np.repeat(psf[None], recon.shape[0], axis=0)
+        psf = psf.unsqueeze(0).expand(recon.shape[0], -1, -1)
 
-    images = np.stack([recon, psf], axis=1).astype(np.float32)
+    images = torch.stack([recon, psf], dim=1)  # (N, 2, H, W)
 
-    img_min = images.min(axis=(2, 3), keepdims=True)
-    img_max = images.max(axis=(2, 3), keepdims=True)
+    img_min = images.amin(dim=(2, 3), keepdim=True)
+    img_max = images.amax(dim=(2, 3), keepdim=True)
     images = (images - img_min) / (img_max - img_min)
 
-    im = torch.from_numpy(images).to(torch.float32)
-
-    dataset = TensorDataset(im)
+    # images is already a tensor, skip the np -> tensor conversion
+    dataset = TensorDataset(images)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
 
     if weight_path is not None:
@@ -569,13 +574,10 @@ def predict_shape(
         pbar.set_description(description if description else "Predicting shapes")
 
         with pbar:
-            for im in dataloader:
+            for (im,) in dataloader:
                 pbar.update(1)
-                im = im[0]
-                im = im.to(device)
+                im = im.to(device)  # moves to device only if not already there
                 ypred = model(im)
-                ypred_all.append(ypred.cpu().detach().numpy())
+                ypred_all.append(ypred.detach().cpu().numpy())
 
-    ypred_all = np.concatenate(ypred_all)
-
-    return ypred_all
+    return np.concatenate(ypred_all)

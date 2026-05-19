@@ -193,7 +193,7 @@ def _shape_galsim_single(image: np.ndarray, e1=True):
         return np.array([shape.observed_shape.e1, shape.observed_shape.e2]), valid
 
     g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
-    return g, valid.astype(bool)
+    return g, valid
 
 
 def shape_galsim(images, e1=True):

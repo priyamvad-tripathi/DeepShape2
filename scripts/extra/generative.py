@@ -3,22 +3,23 @@ import numpy as np
 import torch
 from deepinv.models import DRUNet
 
-from deepshape2.utils import get_freest_gpu, load_h5, set_seed
+from deepshape2.utils import get_freest_gpu, load_config, set_seed
 from deepshape2.visualization import plot
 
 device = get_freest_gpu(set_device=True)
 
-data = load_h5("/scratch/tripathi/Data_DS_1/dataset_dirty_train_sers.h5")
 
 set_seed()
 
 # %%
-denoiser = DRUNet(in_channels=1, out_channels=1, pretrained="download", device=device)
+MODEL_DIR = load_config()["MODEL_DIR"]
+
+denoiser = DRUNet(in_channels=1, out_channels=1, pretrained=None, device=device)
 denoiser = denoiser.eval()
 
 
 ckpt = torch.load(
-    "/scratch/tripathi/DS2/Model_weights/drunet_fine_tuned.pt",
+    MODEL_DIR / "drunet_blended.pt",
     map_location=device,
     weights_only=False,
 )
@@ -40,12 +41,7 @@ def denoiser_to_score(denoiser, x_noisy, sigma):
     return score
 
 
-true_images = torch.from_numpy(data["true image"][:N_SAMPLES]).unsqueeze(1).to(device)
-true_images = true_images / true_images.amax(dim=(1, 2, 3)).view(-1, 1, 1, 1)
-samples0 = true_images * 0 + torch.randn_like(true_images) * 1
-
-# samples = torch.rand(N_SAMPLES, 1, 128, 128).to(device)
-# samples = samples*SIGMA
+samples0 = torch.randn(N_SAMPLES, 1, 128, 128).to(device)
 
 
 T = 100

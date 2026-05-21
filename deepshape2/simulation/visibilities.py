@@ -40,7 +40,7 @@ __all__ = [
 cfg = load_config()
 
 FREQUENCY = cfg["frequency"]
-BANDWIDTH = 0.3 * FREQUENCY
+BANDWIDTH = cfg.get("bandwidth", 0.3 * FREQUENCY)
 INTEGRATION_TIME = cfg["integration_time"]
 HA_INTERVAL = cfg["ha_interval"]
 CELLSIZE = cfg["SCALE_RADIANS"]

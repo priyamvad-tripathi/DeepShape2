@@ -6,7 +6,7 @@ bandwidth: 50585937.5  # Hz
 
 # Pixel scale
 # SCALE_RADIANS: 6.93e-07
-SCALE_RADIANS: 4.84e-07 # 0.1 arcsec/pixel images from ILT
+SCALE_RADIANS: 4.85e-07 # 0.1 arcsec/pixel images from ILT
 
 # Sky centre
 # RA0 : 56.0

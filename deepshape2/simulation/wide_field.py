@@ -47,9 +47,7 @@ DEC0 = cfg["DEC0"]
 # Size of wide field in degrees in flat sky approximation along one axis
 SKY_SIZE = 20
 NPIX_SKY = cfg["NPIX_SKY"]
-
-NPIX_STAMP = 256
-
+NPIX_STAMP = 128
 TRECS_DIR = cfg["TRECS_DIR"]
 
 # %% Catalogue Processing Functions

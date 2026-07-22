@@ -286,6 +286,7 @@ def plot_histogram(
     psf_mod=None,
     psf_pa=None,
     wrap=True,
+    fname=None,
 ):
 
     def wrap_pa_deg(pa_deg):
@@ -375,6 +376,7 @@ def plot_histogram(
     ax[1].set_title("PA comparison")
 
     fig.colorbar(h2[3], ax=ax[1], fraction=0.05, pad=0.02)
+    fig.set_constrained_layout_pads(w_pad=0.02, wspace=0.02)
 
     # --- PSF marker ---
     if psf_mod is not None:
@@ -397,4 +399,4 @@ def plot_histogram(
     if suptitle is not None:
         fig.suptitle(suptitle)
 
-    plt.show()
+    savefig(fname)

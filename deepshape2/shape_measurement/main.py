@@ -163,7 +163,7 @@ def train(
                     loss_fn=loss_fn,
                     device=device,
                 )
-                scheduler.step(val_loss)
+                # scheduler.step(val_loss)
 
                 # EMA update
                 if val_loss_ema is None:
@@ -174,26 +174,24 @@ def train(
                 # Step scheduler on smoothed value
                 scheduler.step(val_loss_ema)
 
-                val_loss_list.append(val_loss_ema)
+                val_loss_list.append(val_loss)
 
-                is_best = val_loss_ema < best_val_loss
+                is_best = val_loss < best_val_loss
                 if is_best:
                     best_epoch = epoch
-                    best_val_loss = val_loss_ema
+                    best_val_loss = val_loss
                     best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
                 pfix = {
                     "Train Loss": f"{epoch_loss:.{precision}e}",
                     "Val Loss": (
-                        f"{Color.RED}{val_loss_ema:.4e}{Color.OFF}"
+                        f"{Color.RED}{val_loss:.4e}{Color.OFF}"
                         if is_best
-                        else f"{val_loss_ema:.4e}"
+                        else f"{val_loss:.4e}"
                     ),
                 }
                 pbar.set_postfix(pfix)
-                line += f" | Val Loss: {val_loss_ema:.4e}" + (
-                    " BEST" if is_best else ""
-                )
+                line += f" | Val Loss: {val_loss:.4e}" + (" BEST" if is_best else "")
                 line += f" | Time Elapsed: {time_string(time.time() - start_time)}"
 
             else:

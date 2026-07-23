@@ -63,6 +63,7 @@ def train(
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
     tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
+    tqdm_flag = kwargs.get("tqdm_enabled", TQDM_FLAG)
 
     scheduler = None
     if scheduler_params:
@@ -104,7 +105,7 @@ def train(
             new_lr = current_lr < lr_list[-1]
             lr_list.append(current_lr)
 
-        pbar = get_progress_bar(TQDM_FLAG, total=len(train_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(tqdm_flag, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
 
         with pbar:
@@ -156,7 +157,7 @@ def train(
             kl_loss_list.append(epoch_kl)
 
             # Print updates if tqdm disabled
-            if not TQDM_FLAG:
+            if not tqdm_flag:
                 line0 = f"Epoch {epoch + 1}/{epochs}"
                 if current_lr is not None:
                     line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
@@ -193,13 +194,13 @@ def train(
                 }
                 pbar.set_postfix(pfix)
 
-                if not TQDM_FLAG:
+                if not tqdm_flag:
                     marker = "BEST" if is_best else ""
                     line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
-            if not TQDM_FLAG:
+            if not tqdm_flag:
                 print(line)
                 print("-" * 50)
 
@@ -270,6 +271,7 @@ def predict(
     scale_fac=SCALE_FACTOR,
     print_stats=True,
     n=5,
+    tqdm_flag=TQDM_FLAG,
 ):
     if weights is not None:
         model.load_state_dict(weights)
@@ -280,7 +282,7 @@ def predict(
     psnr_out_all, psnr_in_all = [], []
 
     with torch.inference_mode():
-        pbar = get_progress_bar(TQDM_FLAG, total=len(val_loader), **tqdm_kwargs)
+        pbar = get_progress_bar(tqdm_flag, total=len(val_loader), **tqdm_kwargs)
 
         with pbar:
             for inp, target in val_loader:

@@ -48,7 +48,7 @@ tqdm:
 LOCAL_DIR:  "${path:/scratch/tripathi/}"
 RESULTS_DIR: "${path:/home/tripathi/DeepShape2/results/}"
 TRECS_DIR:  "${path:/scratch/tripathi/TRECS/}"
-GENCI_DIR:  "${path:/lustre/fswork/projects/rech/klu/uyt81gs/}"
+GENCI_DIR:   "${path:/lustre/fsn1/projects/rech/klu/uyt81gs/}"
 RLF_DIR:    "${path:/home/tripathi/RadioLensfit2/}"
 
 # Models

@@ -29,7 +29,6 @@ __all__ = ["train", "predict", "plot_bad_cases", "predict_multiple"]
 
 cfg = load_config()
 SCALE_FACTOR = cfg.get("SCALE_FACTOR", 5e7)
-TQDM_FLAG = cfg["TQDM"]
 
 
 # %% Training Function
@@ -63,7 +62,7 @@ def train(
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
     tqdm_kwargs = kwargs.get("tqdm_kwargs", dict(colour="green", unit="batch"))
-    tqdm_flag = kwargs.get("tqdm_enabled", TQDM_FLAG)
+    tqdm_flag = kwargs.get("tqdm_flag", True)
 
     scheduler = None
     if scheduler_params:
@@ -104,6 +103,12 @@ def train(
             current_lr = optimizer.param_groups[0]["lr"]
             new_lr = current_lr < lr_list[-1]
             lr_list.append(current_lr)
+
+        if not tqdm_flag:
+            line0 = f"Epoch {epoch + 1}/{epochs}"
+            if current_lr is not None:
+                line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
+            print(line0)
 
         pbar = get_progress_bar(tqdm_flag, total=len(train_loader), **tqdm_kwargs)
         pbar.set_description(f"Epoch {epoch + 1}/{epochs}")
@@ -158,11 +163,8 @@ def train(
 
             # Print updates if tqdm disabled
             if not tqdm_flag:
-                line0 = f"Epoch {epoch + 1}/{epochs}"
-                if current_lr is not None:
-                    line0 += f" | LR: {current_lr:.2e}" + (" NEW" if new_lr else "")
-                print(line0)
                 line = f"Train Loss: {epoch_loss:.{precision}e} | Recon: {epoch_recon:.{precision}e} | KL: {epoch_kl:.{precision}e}"
+                print(line)
 
             # --- Validation ---
             if val_loader:
@@ -196,11 +198,12 @@ def train(
 
                 if not tqdm_flag:
                     marker = "BEST" if is_best else ""
-                    line += f" | Val Loss: {-val_loss:.3f} dB {marker}"
+                    line = f" | Val Loss: {-val_loss:.3f} dB {marker}"
             else:
                 best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
             if not tqdm_flag:
+                line += f" | Time elapsed {time_string(time.time() - start_time)}"
                 print(line)
                 print("-" * 50)
 
@@ -271,7 +274,7 @@ def predict(
     scale_fac=SCALE_FACTOR,
     print_stats=True,
     n=5,
-    tqdm_flag=TQDM_FLAG,
+    tqdm_flag=True,
 ):
     if weights is not None:
         model.load_state_dict(weights)

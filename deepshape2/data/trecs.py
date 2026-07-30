@@ -5,11 +5,11 @@ import numpy as np
 import pandas as pd
 from astropy.io import fits
 
-from deepshape2.utils import load_config
+from deepshape2.utils import convert_e_to_g, load_config
 
 # Directory containing the fits files
 cfg = load_config()
-FITS_DIR = cfg["TRECS_DIR"]
+TRECS_DIR = cfg["TRECS_DIR"]
 
 """
 To download the files:
@@ -18,21 +18,6 @@ wget -O SFG_deep.fits "https://cdsarc.u-strasbg.fr/ftp/VII/282/fits/catalogue_SF
 
 
 # %% Functions
-def e1e2_to_g1g2(e1, e2):
-    """Function to convert ellipticity into correct format"""
-    e = np.sqrt(e1**2 + e2**2)
-
-    cos_2t = e1 / e
-    sin_2t = e2 / e
-
-    r = np.sqrt((1 - e) / (1 + e))
-
-    g_new = (1 - r) / (1 + r)
-
-    g1 = g_new * cos_2t
-    g2 = g_new * sin_2t
-
-    return np.nan_to_num(g1), np.nan_to_num(g2)
 
 
 def ra_min_max(ra_deg):
@@ -59,7 +44,7 @@ def ra_min_max(ra_deg):
 names = ["medium", "deep"]
 
 for name in names:
-    catalog = fits.open(FITS_DIR + f"SFG_{name}.fits")
+    catalog = fits.open(TRECS_DIR / f"SFG_{name}.fits")
 
     cat1 = catalog[1]  # Selecting the first slice of the FITS ("Catalogue")
     data = cat1.data  # Extract data from slice
@@ -75,7 +60,10 @@ for name in names:
     e1 = copy.deepcopy(data["e1"])
     e2 = copy.deepcopy(data["e2"])
 
-    g1, g2 = e1e2_to_g1g2(e1, e2)
+    shape_e = np.column_stack((e1, e2))
+
+    shape_g = convert_e_to_g(shape_e)
+    g1, g2 = shape_g[:, 0], shape_g[:, 1]
 
     catalog = {
         "flux": np.array(flux),
@@ -89,14 +77,14 @@ for name in names:
     }
 
     df = pd.DataFrame.from_dict(catalog)
-    df.to_pickle(FITS_DIR + f"catalog_{name}.pkl")
+    df.to_pickle(TRECS_DIR + f"catalog_{name}.pkl")
 
 
 # %% Do the same for wide field
 all_data = []
 
 for i in range(1, 11):
-    catalog = fits.open(FITS_DIR + f"SFG_wide_{i}.fits")
+    catalog = fits.open(TRECS_DIR + f"SFG_wide_{i}.fits")
     cat1 = catalog[1]  # first extension
     data = cat1.data
 
@@ -109,7 +97,9 @@ for i in range(1, 11):
     e1 = copy.deepcopy(data["e1"])
     e2 = copy.deepcopy(data["e2"])
 
-    g1, g2 = e1e2_to_g1g2(e1, e2)
+    shape_e = np.column_stack((e1, e2))
+    shape_g = convert_e_to_g(shape_e)
+    g1, g2 = shape_g[:, 0], shape_g[:, 1]
 
     catalog_dict = {
         "flux": np.array(flux),
@@ -127,4 +117,4 @@ for i in range(1, 11):
 combined_df = pd.concat(all_data, ignore_index=True)
 
 # save as one pickle
-combined_df.to_pickle(FITS_DIR + "catalog_wide.pkl")
+combined_df.to_pickle(TRECS_DIR + "catalog_wide.pkl")

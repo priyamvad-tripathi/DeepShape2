@@ -1,12 +1,13 @@
 # %% Load Modules
 import warnings
+from pathlib import Path
 
 import astropy.units as u
+import dask.array as da
 import galsim
 import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
-import dask.array as da
 
 # from astropy.wcs import WCS
 from dask import compute, delayed
@@ -22,6 +23,7 @@ __all__ = [
     "filter_patch_by_flux",
     "filter_patch_by_size",
     "compute_pixel_coordinates",
+    "simulate_isolated_stamps",
 ]
 
 # %% Default Parameters
@@ -43,6 +45,7 @@ sersic_indexes = np.linspace(0.7, 2, 100)
 RA0 = cfg["RA0"]
 DEC0 = cfg["DEC0"]
 
+DEFAULT_STAMP_HALF_WIDTH_PIXELS = 130
 
 # Size of wide field in degrees in flat sky approximation along one axis
 SKY_SIZE = 20
@@ -84,16 +87,46 @@ def generate_patch_locations(
     return chosen_centers
 
 
-def random_patch(center, catalogue_type, scale=SCALE_DEGREES, patch_size=1.0):
+def load_catalogue(
+    catalogue: pd.DataFrame | str | Path | None = None,
+    catalogue_type: str | None = None,
+) -> pd.DataFrame:
+    """Return a catalogue from an in-memory frame, a pickle path, or a type name."""
+    if isinstance(catalogue, pd.DataFrame):
+        return catalogue
+    if catalogue is not None:
+        return pd.read_pickle(catalogue)
+    if catalogue_type is None:
+        raise ValueError("Provide either 'catalogue' or 'catalogue_type'.")
+    return pd.read_pickle(TRECS_DIR / f"catalog_{catalogue_type}.pkl")
+
+
+def random_patch(
+    center: tuple[float, float],
+    catalogue: pd.DataFrame | str | Path | None = None,
+    catalogue_type: str | None = None,
+    patch_size_degrees: float = 1.0,
+    pixel_scale_degrees: float = SCALE_DEGREES,
+    stamp_half_width_pixels: int = DEFAULT_STAMP_HALF_WIDTH_PIXELS,
+) -> pd.DataFrame:
+    """Select galaxies inside a square patch of flat-sky coordinates.
+
+    The patch is centred on ``center`` and spans ``patch_size_degrees`` on a
+    side. Galaxies within ``stamp_half_width_pixels`` of an edge are excluded so
+    that a full stamp can be drawn around every galaxy returned.
+
+    Any pre-existing ``ra``/``dec`` columns are dropped, since they refer to the
+    original catalogue projection rather than this patch.
+
+    Raises:
+        ValueError: if no catalogue source is given, or if the edge margin
+            leaves no usable area inside the patch.
     """
-    Extract a patch around a given center (cx, cy) in flat-sky coordinates.
-    Returns the galaxies in the patch and RA/Dec of the patch center.
-    """
-    catalogue = pd.read_pickle(TRECS_DIR / f"catalog_{catalogue_type}.pkl")
+    catalogue = load_catalogue(catalogue, catalogue_type)
 
     cx, cy = center
-    x0, y0 = cx - patch_size / 2, cy - patch_size / 2
-    x1, y1 = cx + patch_size / 2, cy + patch_size / 2
+    x0, y0 = cx - patch_size_degrees / 2, cy - patch_size_degrees / 2
+    x1, y1 = cx + patch_size_degrees / 2, cy + patch_size_degrees / 2
 
     # Select galaxies inside patch
     patch = catalogue[
@@ -104,7 +137,7 @@ def random_patch(center, catalogue_type, scale=SCALE_DEGREES, patch_size=1.0):
     ].copy()
 
     # Drop galaxies too close to patch edge
-    margin = scale * 130
+    margin = pixel_scale_degrees * 130
     mask = (
         (patch["x"] - margin >= x0)
         & (patch["x"] + margin <= x1)
@@ -197,8 +230,43 @@ def compute_pixel_coordinates(
 
 
 def _simulate_galaxy(
-    row, simple=False, min_flux=10e-6, npix_stamp=NPIX_STAMP, scale=SCALE_ARCSEC
+    row,
+    simple=False,
+    min_flux=10e-6,
+    npix_stamp=NPIX_STAMP,
+    scale=SCALE_ARCSEC,
+    reduced_shear=False,
 ):
+    """
+    Simulate a single galaxy stamp using GalSim.
+    Parameters
+    ----------
+    row : pd.Series
+        Must have 'flux', 'size', 'e1', 'e2'. Optionally
+        'sersic_index' for fixed Sersic index.
+    simple : bool
+        If True, force Sersic index = 1 (default False)
+    min_flux : float
+        Galaxies below this flux get no stamp (default 10e-6)
+    npix_stamp : int
+        Output stamp size (default NPIX_STAMP)
+    scale : float
+        Pixel scale in arcsec (default SCALE_ARCSEC)
+    reduced_shear : bool
+        If True, interpret e1/e2 as reduced shear g1/g2 instead of ellipticity distortion
+        original deep_set /wide_set catlogue use g1/g2 while new 150 MHz catalogue uses e1/e2.
+        This flag allows to switch between the two (default False)
+
+    Returns
+    -------
+    stamp : galsim.ImageF
+        The full galaxy stamp (may be larger than npix_stamp)
+    sersic_index : float
+        The Sersic index used for this galaxy
+    isolated_stamp : np.ndarray or int
+        The isolated stamp cropped to npix_stamp, or 0 if flux < min_flux
+    """
+
     flux = row["flux"]
     scale_length = row["size"]
     e1 = row["e1"]
@@ -216,7 +284,10 @@ def _simulate_galaxy(
         n=sersic_index, half_light_radius=hlr, gsparams=big_fft_params, flux=flux
     )
 
-    e_tot = galsim.Shear(e1=e1, e2=e2)
+    if reduced_shear:
+        e_tot = galsim.Shear(g1=e1, g2=e2)
+    else:
+        e_tot = galsim.Shear(e1=e1, e2=e2)
     gal_true = gal.shear(e_tot)
 
     nx = gal_true.getGoodImageSize(pixel_scale=scale)
@@ -329,7 +400,6 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
     sky_array = field.array.copy()
 
     if stamps_only:
-
         # Blended stamps — dask crops from sky, only for bright sources
         bright_mask = np.array([isinstance(row[-1], np.ndarray) for row in results])
         bright_cx = patch["pix_x"][bright_mask].values
@@ -347,3 +417,109 @@ def simulate_wide_field(patch, NPIX_SKY=NPIX_SKY, **kwargs):
         return isolated_stamps, blended_stamps
 
     return sky_array, patch, isolated_stamps
+
+
+# %% Isolated stamp simulation functions
+
+
+def _isolated_only(
+    row, simple=False, min_flux=50e-6, npix_stamp=NPIX_STAMP, scale=SCALE_ARCSEC
+):
+
+    _, sersic_index, isolated_stamp = _simulate_galaxy(
+        row,
+        simple=simple,
+        min_flux=min_flux,
+        npix_stamp=npix_stamp,
+        scale=scale,
+    )
+    return sersic_index, isolated_stamp
+
+
+def simulate_isolated_stamps(patch, **kwargs):
+    """
+    Simulate isolated (unblended) postage stamps for every galaxy in `patch`,
+    in parallel with dask. No wide-field image is built.
+
+    Uses exactly the same drawing code as simulate_wide_field
+    (_simulate_galaxy -> process_stamp), so the stamps are pixel-consistent
+    with the ones produced for the blended dataset.
+
+    Parameters
+    ----------
+    patch : pd.DataFrame
+        Needs columns 'flux', 'size', 'e1', 'e2'. If a 'sersic_index' column
+        is present it is used, otherwise one is drawn at random per galaxy
+        (as in simulate_wide_field). No positional columns are required.
+
+    Keyword Arguments
+    -----------------
+    simple : bool          force n_sersic = 1 (default False)
+    min_flux : float       galaxies below this flux get no stamp (default 50e-6)
+    npix_stamp : int       output stamp size (default NPIX_STAMP)
+    scale : float          pixel scale in arcsec (default SCALE_ARCSEC)
+    chunk_size : int       galaxies per dask task (default 128)
+    verbosity : int
+
+    Returns
+    -------
+    isolated_stamps : np.ndarray, shape (n_kept, npix_stamp, npix_stamp)
+    patch_out : pd.DataFrame
+        The rows of `patch` that produced a stamp, in the same order as
+        `isolated_stamps`, with the realised 'sersic_index' filled in.
+    """
+    verbosity = kwargs.get("verbosity", 0)
+    simple = kwargs.get("simple", False)
+    min_flux = kwargs.get("min_flux", 50e-6)
+    npix_stamp = kwargs.get("npix_stamp", NPIX_STAMP)
+    scale = kwargs.get("scale", SCALE_ARCSEC)
+    chunk_size = kwargs.get("chunk_size", 128)
+
+    if verbosity > 0:
+        print(f"Simulating {len(patch)} isolated stamps of size {npix_stamp}")
+        print(
+            f"Intensity: [{np.min(patch['flux']) * 1e6:0.2f},"
+            f"{np.max(patch['flux']) * 1e6:0.2f}] uJy"
+        )
+        print(
+            f"Scale length: [{np.min(patch['size']):0.2f},"
+            f"{np.max(patch['size']):0.2f}] arcsec"
+        )
+
+    def simulate_batch(batch):
+        return [
+            _isolated_only(
+                row,
+                simple=simple,
+                min_flux=min_flux,
+                npix_stamp=npix_stamp,
+                scale=scale,
+            )
+            for row in batch
+        ]
+
+    cols = ["flux", "size", "e1", "e2"]
+    if "sersic_index" in patch.columns:
+        cols.append("sersic_index")
+    rows = patch[cols].to_dict(orient="records")
+
+    tasks = [
+        delayed(simulate_batch)(rows[i : i + chunk_size])
+        for i in range(0, len(rows), chunk_size)
+    ]
+
+    results = compute(*tasks)
+    results = [r for batch in results for r in batch]
+
+    patch_out = patch.copy()
+    patch_out["sersic_index"] = np.array([r[0] for r in results])
+    mask = np.array([isinstance(r[-1], np.ndarray) for r in results])
+    patch_out["flux_mask"] = mask
+
+    kept = [r[-1] for r in results if isinstance(r[-1], np.ndarray)]
+    if len(kept) == 0:
+        isolated_stamps = np.empty((0, npix_stamp, npix_stamp), dtype="float32")
+    else:
+        isolated_stamps = np.stack(kept)
+
+    return isolated_stamps, patch_out[mask].copy()

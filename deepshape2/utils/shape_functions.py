@@ -70,26 +70,31 @@ def convert_e_to_g(shape_e):
 
 def axisratio_pa_to_shape(a, b, pa, complement=True, rad=False):
 
-    a = np.asarray(a)
-    b = np.asarray(b)
-    pa = np.asarray(pa)
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    pa = np.asarray(pa, dtype=float)
+
+    scalar = (a.ndim == 0) and (b.ndim == 0) and (pa.ndim == 0)
+
+    a, b, pa = np.atleast_1d(a, b, pa)
+    a, b, pa = np.broadcast_arrays(a, b, pa)
 
     if rad:
         pa = np.degrees(pa)
 
     if complement:
-        pa = 90 - np.asarray(pa)
+        pa = 90 - pa
 
     q = b / a
 
-    g = np.empty((len(q), 2))
+    g = np.empty((q.size, 2))
 
-    for i, (qi, beta) in enumerate(zip(q, pa)):
+    for i, (qi, beta) in enumerate(zip(q.ravel(), pa.ravel())):
         s = galsim.Shear(q=qi, beta=beta * galsim.degrees)
         g[i, 0] = s.e1
         g[i, 1] = s.e2
 
-    return g
+    return g[0] if scalar else g
 
 
 def wrap_angle(x, period="half"):

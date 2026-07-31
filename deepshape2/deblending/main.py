@@ -57,7 +57,7 @@ def train(
 
     # --- Config ---
     filename = kwargs.get("filename")
-    scheduler_params = kwargs.get("scheduler_params", None)
+    scheduler_params = kwargs.get("scheduler_params")
     save_freq = kwargs.get("save_freq", 50)
     beta = kwargs.get("beta", 1.0)
     precision = kwargs.get("precision", 4)
@@ -280,9 +280,16 @@ def predict(
         model.load_state_dict(weights)
     model.eval()
 
-    # Accumulate results as tensors on GPU
+    def _to_numpy(t):
+        """(B, C, H, W) GPU tensor -> (B, H, W) CPU array, sinh-descaled."""
+        arr = t.float().cpu().numpy()
+        if arr.ndim == 4 and arr.shape[1] == 1:
+            arr = arr[:, 0]
+        return arr
+
+    # Accumulate CPU numpy arrays / metrics only
     targets_all, inputs_all, outputs_all = [], [], []
-    psnr_out_all, psnr_in_all = [], []
+    psnr_out_all, psnr_in_all, ssim_out_all, blend_all = [], [], [], []
 
     with torch.inference_mode():
         pbar = get_progress_bar(tqdm_flag, total=len(val_loader), **tqdm_kwargs)
@@ -298,36 +305,42 @@ def predict(
                 if isinstance(out, (tuple, list)):
                     out = out[0]
 
-                # Append GPU tensors
                 if inp_gpu.shape[1] == 2:
                     inp_gpu = inp_gpu[:, :1]  # Use only the first channel if 2 exist
 
-                targets_all.append(target_gpu)
-                inputs_all.append(inp_gpu)
-                outputs_all.append(out)
-
-                # Scale images
+                # Scale images (still on GPU)
                 target_sc = torch.sinh(target_gpu) / scale_fac
                 out_sc = torch.sinh(out) / scale_fac
                 inp_sc = torch.sinh(inp_gpu) / scale_fac
 
-                # Compute metrics on GPU
-                psnr_batch_out = psnr_torch(target_sc, out_sc)
-                psnr_batch_in = psnr_torch(target_sc, inp_sc)
+                # Metrics on GPU, then immediately off it
+                psnr_out_all.append(psnr_torch(target_sc, out_sc).cpu().numpy())
+                psnr_in_all.append(psnr_torch(target_sc, inp_sc).cpu().numpy())
 
-                psnr_out_all.append(psnr_batch_out)
-                psnr_in_all.append(psnr_batch_in)
+                # Move this batch to CPU
+                target_np = _to_numpy(target_sc)
+                out_np = _to_numpy(out_sc)
+                inp_np = _to_numpy(inp_sc)
 
-    # Concatenate batches and move to CPU only once
-    targets_all = np.sinh(torch.cat(targets_all).cpu().numpy().squeeze()) / scale_fac
-    outputs_all = np.sinh(torch.cat(outputs_all).cpu().numpy().squeeze()) / scale_fac
-    inputs_all = np.sinh(torch.cat(inputs_all).cpu().numpy().squeeze()) / scale_fac
+                # CPU-side metrics, batch by batch
+                ssim_out_all.append(np.atleast_1d(ssim_batch(target_np, out_np)))
+                blend_all.append(np.atleast_1d(blendedness(target_np, inp_np)))
 
-    psnr_out = torch.cat(psnr_out_all).cpu().numpy()
+                targets_all.append(target_np)
+                outputs_all.append(out_np)
+                inputs_all.append(inp_np)
 
-    ssim_out = ssim_batch(targets_all, outputs_all)
+                # Drop GPU references for this batch
+                del inp_gpu, target_gpu, out, target_sc, out_sc, inp_sc
 
-    blend = blendedness(targets_all, inputs_all)
+    targets_all = np.concatenate(targets_all, axis=0)
+    outputs_all = np.concatenate(outputs_all, axis=0)
+    inputs_all = np.concatenate(inputs_all, axis=0)
+
+    psnr_out = np.concatenate(psnr_out_all, axis=0)
+    psnr_in = np.concatenate(psnr_in_all, axis=0)
+    ssim_out = np.concatenate(ssim_out_all, axis=0)
+    blend = np.concatenate(blend_all, axis=0)
 
     if print_stats:
         print(
@@ -337,9 +350,9 @@ def predict(
             f"PSNR: Max {np.max(psnr_out):.03f} dB | Min {np.min(psnr_out):.03f} dB | Mean {np.mean(psnr_out):.03f} dB"
         )
 
-    # Store metrics for external use
     metrics = {
         "psnr_out": psnr_out,
+        "psnr_in": psnr_in,
         "ssim_out": ssim_out,
         "targets": targets_all,
         "output": outputs_all,
@@ -347,7 +360,6 @@ def predict(
         "blend": blend,
     }
 
-    # Optional: Visualization
     if n > 0:
         tit_out = [f"{s:.02f}/{p:.02f} dB" for s, p in zip(ssim_out[:n], psnr_out[:n])]
         tit2 = [f"{bl:.3f}" for bl in blend[:n]]
@@ -373,9 +385,11 @@ def predict(
 # %% Plotting Function
 def plot_bad_cases(
     metrics,
-    names=["PSNR", "SSIM"],
+    names=None,
     n=5,
 ):
+    if names is None:
+        names = ["PSNR", "SSIM"]
     psnr_out = metrics["psnr_out"]
     ssim_out = metrics["ssim_out"]
     targets = metrics["targets"]
@@ -522,10 +536,7 @@ def predict_multiple(
             np.sinh(torch.cat(r["outputs"]).cpu().numpy().squeeze()) / scale_fac
         )
         psnr = torch.cat(r["psnr"]).cpu().numpy()
-        if do_SSIM:
-            ssim = ssim_batch(targets_all, outputs_all)
-        else:
-            ssim = None
+        ssim = ssim_batch(targets_all, outputs_all) if do_SSIM else None
 
         if print_stats:
             print(f"\nModel: {name}")

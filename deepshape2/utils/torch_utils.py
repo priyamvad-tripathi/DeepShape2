@@ -19,6 +19,7 @@ __all__ = [
     "set_seed",
     "count_params",
     "count_params_by_module",
+    "ema",
 ]
 
 
@@ -111,3 +112,14 @@ def count_params_by_module(model, depth=1):
     print("-" * 52)
     print(f"{'TOTAL':<30} {total:>12,}")
     return total
+
+
+# %%
+def ema(values, alpha=0.1):
+    """Reproduce the val_loss_ema sequence from raw per-epoch val losses."""
+    out = []
+    s = None
+    for v in values:
+        s = v if s is None else (1 - alpha) * s + alpha * v
+        out.append(s)
+    return out

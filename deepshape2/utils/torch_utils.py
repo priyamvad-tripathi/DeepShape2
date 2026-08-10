@@ -12,7 +12,14 @@ torch.manual_seed(2024)
 np.random.seed(2024)
 random.seed(2024)
 
-__all__ = ["get_freest_gpu", "save_ckp", "load_ckp", "set_seed"]
+__all__ = [
+    "get_freest_gpu",
+    "save_ckp",
+    "load_ckp",
+    "set_seed",
+    "count_params",
+    "count_params_by_module",
+]
 
 
 # %%
@@ -49,7 +56,7 @@ def save_ckp(model, optimizer, filename, **kwargs):
     try:
         parent_dir.mkdir(parents=True, exist_ok=False)
     except FileExistsError:
-        1
+        pass
     else:
         print(f"New folder created {parent_dir}")
 
@@ -78,3 +85,29 @@ def set_seed(seed=2024, deterministic=True):
     if deterministic:
         torch.backends.cudnn.deterministic = True
         torch.backends.cudnn.benchmark = False
+
+
+def count_params(model, trainable_only=True, verbose=True):
+    """Print and return the number of parameters in a network."""
+    params = [p for p in model.parameters() if p.requires_grad or not trainable_only]
+    total = sum(p.numel() for p in params)
+
+    if verbose:
+        print(f"{type(model).__name__}: {total:,} parameters ({total / 1e6:.2f}M)")
+    return total
+
+
+def count_params_by_module(model, depth=1):
+    total = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"{'module':<30} {'params':>12}   {'%':>6}")
+    print("-" * 52)
+    for name, mod in model.named_children():
+        n = sum(p.numel() for p in mod.parameters() if p.requires_grad)
+        print(f"{name:<30} {n:>12,}   {100 * n / total:5.1f}%")
+        if depth > 1:
+            for sub, m in mod.named_children():
+                k = sum(p.numel() for p in m.parameters() if p.requires_grad)
+                print(f"  {sub:<28} {k:>12,}   {100 * k / total:5.1f}%")
+    print("-" * 52)
+    print(f"{'TOTAL':<30} {total:>12,}")
+    return total

@@ -99,7 +99,7 @@ class eq_block(torch.nn.Module):
 
 # %% Simple Model for true images: no PSF encoding
 class shapenet(torch.nn.Module):
-    def __init__(self, eq_block=eq_block()):
+    def __init__(self, eq_block=eq_block()):  # noqa: B008
         super().__init__()
 
         self.eq = eq_block

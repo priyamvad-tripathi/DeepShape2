@@ -1,5 +1,4 @@
 import astropy.units as u
-import galsim
 import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.nddata import Cutout2D
@@ -8,7 +7,6 @@ from numpy.fft import ifftshift, irfftn, rfftn
 __all__ = [
     "extract_image",
     "extract_multiple",
-    "shape_galsim",
     "get_stamps",
     "process_stamp",
     "centers_to_limits",
@@ -112,7 +110,7 @@ def extract_multiple(arr, centers, NPIX=128, relative=True, switch_xy=True):
 
     crops = []
 
-    for i, center in enumerate(centers):
+    for _, center in enumerate(centers):
         crop = extract_image(
             arr, NPIX=NPIX, center=[center], relative=relative, switch_xy=switch_xy
         )
@@ -157,76 +155,6 @@ def process_stamp(stamp, NPIX):
             stamp,
             ((pad, pad + pad_extra), (pad, pad + pad_extra)),
             mode="constant",
-        )
-
-
-# %% Shape measurement functions
-
-
-def _shape_galsim_single(image: np.ndarray, e1=True):
-    """Compute ellipticity and validity flag for a single 2D galaxy image using GalSim."""
-
-    NPIX = image.shape[0]
-    image_galsim = galsim.Image(image)
-
-    try:
-        shape = galsim.hsm.FindAdaptiveMom(
-            image_galsim,
-            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
-            strict=False,
-        )
-    except galsim.errors.GalSimHSMError:
-        new_params = galsim.hsm.HSMParams(
-            max_mom2_iter=2000, convergence_threshold=0.1, bound_correct_wt=2.0
-        )
-        shape = galsim.hsm.FindAdaptiveMom(
-            image_galsim,
-            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
-            strict=False,
-            hsmparams=new_params,
-        )
-
-    # Convert status → validity (True = good, False = bad)
-    valid = True if shape.moments_status == 0 else False
-
-    if e1:
-        return np.array([shape.observed_shape.e1, shape.observed_shape.e2]), valid
-
-    g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
-    return g, valid
-
-
-def shape_galsim(images, e1=True):
-    """
-    Compute galaxy shapes using GalSim adaptive moments.
-
-    Returns
-    -------
-    g : ndarray
-    valid : ndarray or int
-        True = good measurement, False = bad
-    """
-    if images.ndim > 3:
-        images = np.squeeze(images)
-
-    if images.ndim == 2:
-        return _shape_galsim_single(images, e1=e1)
-
-    elif images.ndim == 3:
-        n_images = images.shape[0]
-        g_all = np.zeros((n_images, 2), dtype=float)
-        valid_all = np.zeros(n_images, dtype=bool)
-
-        for i in range(n_images):
-            g, valid = _shape_galsim_single(images[i], e1=e1)
-            g_all[i] = g
-            valid_all[i] = valid
-
-        return g_all, valid_all
-
-    else:
-        raise ValueError(
-            f"Invalid input shape {images.shape}. Expected 2D or 3D array (after squeezing)."
         )
 
 

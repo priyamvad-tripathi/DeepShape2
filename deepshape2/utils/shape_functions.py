@@ -5,6 +5,7 @@ from astropy.stats import circmean, circstd, rayleightest
 
 __all__ = [
     "RMSE",
+    "shape_galsim",
     "position_angle",
     "ellipticity_modulus",
     "convert_g_to_e",
@@ -14,6 +15,75 @@ __all__ = [
     "pa_delta2",
     "compute_circular_stats",
 ]
+
+# %% Shape measurement functions
+
+
+def _shape_galsim_single(image: np.ndarray, e1=True):
+    """Compute ellipticity and validity flag for a single 2D galaxy image using GalSim."""
+
+    NPIX = image.shape[0]
+    image_galsim = galsim.Image(image)
+
+    try:
+        shape = galsim.hsm.FindAdaptiveMom(
+            image_galsim,
+            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
+            strict=False,
+        )
+    except galsim.errors.GalSimHSMError:
+        new_params = galsim.hsm.HSMParams(
+            max_mom2_iter=2000, convergence_threshold=0.1, bound_correct_wt=2.0
+        )
+        shape = galsim.hsm.FindAdaptiveMom(
+            image_galsim,
+            guess_centroid=galsim.PositionD(NPIX // 2, NPIX // 2),
+            strict=False,
+            hsmparams=new_params,
+        )
+
+    # Convert status → validity (True = good, False = bad)
+    valid = True if shape.moments_status == 0 else False
+
+    if e1:
+        return np.array([shape.observed_shape.e1, shape.observed_shape.e2]), valid
+
+    g = np.array([shape.observed_shape.g1, shape.observed_shape.g2])
+    return g, valid
+
+
+def shape_galsim(images, e1=True):
+    """
+    Compute galaxy shapes using GalSim adaptive moments.
+
+    Returns
+    -------
+    g : ndarray
+    valid : ndarray or int
+        True = good measurement, False = bad
+    """
+    if images.ndim > 3:
+        images = np.squeeze(images)
+
+    if images.ndim == 2:
+        return _shape_galsim_single(images, e1=e1)
+
+    elif images.ndim == 3:
+        n_images = images.shape[0]
+        g_all = np.zeros((n_images, 2), dtype=float)
+        valid_all = np.zeros(n_images, dtype=bool)
+
+        for i in range(n_images):
+            g, valid = _shape_galsim_single(images[i], e1=e1)
+            g_all[i] = g
+            valid_all[i] = valid
+
+        return g_all, valid_all
+
+    else:
+        raise ValueError(
+            f"Invalid input shape {images.shape}. Expected 2D or 3D array (after squeezing)."
+        )
 
 
 # %% Functions
@@ -44,28 +114,25 @@ def ellipticity_modulus(shape):
 
 
 def convert_g_to_e(shape_g):
-    """Convert shear (g1, g2) to ellipticity (e1, e2) using galsim.Shear."""
-
-    shape_e = np.zeros_like(shape_g)
-
-    for ns, shape in enumerate(shape_g):
-        g1, g2 = shape
-        shear = galsim.Shear(g1=g1, g2=g2)
-        shape_e[ns] = [shear.e1, shear.e2]
-
-    return shape_e
+    """Convert reduced shear (g1, g2) to distortion (e1, e2).
+    |e| = 2|g| / (1 + |g|^2), phase preserved. Accepts (2,) or (N, 2).
+    """
+    g = np.asarray(shape_g, dtype=float)
+    if g.shape[-1] != 2:
+        raise ValueError(f"expected last axis of length 2, got {g.shape}")
+    gsq = np.sum(g**2, axis=-1, keepdims=True)
+    return g * (2.0 / (1.0 + gsq))
 
 
 def convert_e_to_g(shape_e):
-    """Convert ellipticity (e1, e2) to shear (g1, g2) using galsim.Shear."""
-
-    shape_g = np.zeros_like(shape_e)
-
-    for ns, shape in enumerate(shape_e):
-        e1, e2 = shape
-        shear = galsim.Shear(e1=e1, e2=e2)
-        shape_g[ns] = [shear.g1, shear.g2]
-    return shape_g
+    """Convert distortion (e1, e2) to reduced shear (g1, g2).
+    |g| = |e| / (1 + sqrt(1 - |e|^2)), phase preserved. Accepts (2,) or (N, 2).
+    """
+    e = np.asarray(shape_e, dtype=float)
+    if e.shape[-1] != 2:
+        raise ValueError(f"expected last axis of length 2, got {e.shape}")
+    esq = np.sum(e**2, axis=-1, keepdims=True)
+    return e / (1.0 + np.sqrt(np.clip(1.0 - esq, 0.0, None)))
 
 
 def axisratio_pa_to_shape(a, b, pa, complement=True, rad=False):

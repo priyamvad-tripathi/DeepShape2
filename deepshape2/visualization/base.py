@@ -60,7 +60,7 @@ def savefig(filename=None, dpi=600, remove_bg=False):
         try:
             parent_dir.mkdir(parents=True, exist_ok=False)
         except FileExistsError:
-            1
+            pass
         else:
             print(f"New folder created {parent_dir}")
 
@@ -77,14 +77,45 @@ def savefig(filename=None, dpi=600, remove_bg=False):
 # Function to plot the loss curve for validation and training sets
 def plot_losses(
     loss_lists,
-    labels=["Train Loss", "Val Loss"],
-    skip=5,
+    labels=None,
+    skip=0,
     logscale=False,
     fname=False,
     remove_bg=False,
+    xlabel="Epoch",
+    ylabel="Loss",
 ):
-    fig, ax = plt.subplots()
-    epochs = len(loss_lists[0])
+    """Plot one or several loss curves and mark the minimum of each.
+
+    Parameters
+    ----------
+    loss_lists : sequence of floats, or sequence of sequences of floats
+        Either a single curve (``[0.9, 0.7, ...]`` or a 1-D array) or several
+        curves (``[train, val]``, a 2-D array, ...).
+    labels : str, sequence of str, or None
+        A single label, one label per curve, or ``None`` to use sensible
+        defaults ("Loss" for one curve, "Train Loss"/"Val Loss" for two).
+    skip : int
+        Number of leading epochs to leave out of the plot.
+    """
+    # --- normalise inputs ------------------------------------------------
+    if len(loss_lists) == 0:
+        raise ValueError("No loss curves given.")
+
+    # A scalar first element means we were handed a single curve.
+    if np.ndim(loss_lists[0]) == 0:
+        loss_lists = [loss_lists]
+    loss_lists = [np.asarray(loss).reshape(-1) for loss in loss_lists]
+
+    if labels is None:
+        defaults = {1: ["Loss"], 2: ["Train Loss", "Val Loss"]}
+        labels = defaults.get(
+            len(loss_lists), [f"Loss {i + 1}" for i in range(len(loss_lists))]
+        )
+    elif isinstance(labels, str):
+        labels = [labels]
+    else:
+        labels = list(labels)
 
     assert len(loss_lists) == len(labels), (
         "Number of loss curves must match number of labels"
@@ -95,24 +126,25 @@ def plot_losses(
         "All loss curves must have the same length."
     )
 
+    # --- plot -------------------------------------------------------------
+    fig, ax = plt.subplots()
+    epochs = lengths[0]
     x = np.arange(skip + 1, epochs + 1)
 
-    for i, loss in enumerate(loss_lists):
-        y = np.array(loss[skip:]).reshape(-1)
-        (line,) = ax.plot(x, y, label=labels[i])
+    for loss, label in zip(loss_lists, labels):
+        y = loss[skip:]
+        (line,) = ax.plot(x, y, label=label)
 
         # Find minimum and mark it
-        full_loss = np.array(loss)
-        min_idx = np.argmin(full_loss)
-        min_val = full_loss[min_idx]
-        ax.plot(min_idx + 1, min_val, "*", markersize=12, color=line.get_color())
+        min_idx = np.argmin(y)
+        ax.plot(x[min_idx], y[min_idx], "*", markersize=12, color=line.get_color())
 
     if logscale:
         ax.set_yscale("log")
 
     ax.set_xlim([0, epochs + 1])
-    ax.set_xlabel("Epoch")
-    ax.set_ylabel("Loss")
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
     ax.legend()
     ax.grid(True)
 

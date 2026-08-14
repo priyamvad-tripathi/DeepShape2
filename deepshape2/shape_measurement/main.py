@@ -97,7 +97,10 @@ def train(
             continue
 
         model.train()
-        batch_losses = []
+
+        # Running totals kept on-device: no host sync inside the batch loop.
+        loss_sum = torch.zeros((), device=device)
+        n_seen = 0
 
         current_lr = optimizer.param_groups[0]["lr"]
         new_lr = current_lr < lr_list[-1]
@@ -117,10 +120,8 @@ def train(
 
         with pbar:
             for image, target in train_loader:
-                image, target = (
-                    image.to(device, non_blocking=True),
-                    target.to(device, non_blocking=True),
-                )
+                image = image.to(device, non_blocking=True)
+                target = target.to(device, non_blocking=True)
 
                 # ---------------------------
                 # Model forward + loss
@@ -133,69 +134,71 @@ def train(
 
                 optimizer.step()
 
-                # Logging
-                batch_losses.append(loss.detach().cpu())
-
-                postfix = {
-                    "Train Loss": f"{torch.stack(batch_losses).mean():.{precision}e}",
-                }
-
-                postfix["LR"] = (
-                    f"{Color.RED}{current_lr:.4e}{Color.OFF}"
-                    if new_lr
-                    else f"{current_lr:.4e}"
-                )
+                # Accumulate on-device, weighted by batch size so the final
+                bs = image.shape[0]
+                loss_sum += loss.detach() * bs
+                n_seen += bs
 
                 pbar.update(1)
-                pbar.set_postfix(postfix)
 
-            # --- End of Epoch ---
-            epoch_loss = torch.stack(batch_losses).mean().item()
+                if tqdm_enabled:
+                    running = (loss_sum / n_seen).item()
+                    pbar.set_postfix(
+                        {
+                            "Train Loss": f"{running:.{precision}e}",
+                            "LR": (
+                                f"{Color.RED}{current_lr:.4e}{Color.OFF}"
+                                if new_lr
+                                else f"{current_lr:.4e}"
+                            ),
+                        }
+                    )
+
+            # --- End of Epoch --- (single host sync)
+            epoch_loss = (loss_sum / n_seen).item()
             train_loss_list.append(epoch_loss)
 
             line = f"Train Loss: {epoch_loss:.{precision}e} "
 
             # --- Validation ---
-            if val_loader:
-                val_loss = validation_loss(
-                    model,
-                    val_loader,
-                    loss_fn=loss_fn,
-                    device=device,
-                )
-                # scheduler.step(val_loss)
+            val_loss = validation_loss(
+                model,
+                val_loader,
+                loss_fn=loss_fn,
+                device=device,
+            )
+            # scheduler.step(val_loss)
 
-                # EMA update
-                if val_loss_ema is None:
-                    val_loss_ema = val_loss
-                else:
-                    val_loss_ema = (1 - ema_alpha) * val_loss_ema + ema_alpha * val_loss
-
-                # Step scheduler on smoothed value
-                scheduler.step(val_loss_ema)
-
-                val_loss_list.append(val_loss)
-
-                is_best = val_loss < best_val_loss
-                if is_best:
-                    best_epoch = epoch
-                    best_val_loss = val_loss
-                    best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
-
-                pfix = {
-                    "Train Loss": f"{epoch_loss:.{precision}e}",
-                    "Val Loss": (
-                        f"{Color.RED}{val_loss:.4e}{Color.OFF}"
-                        if is_best
-                        else f"{val_loss:.4e}"
-                    ),
-                }
-                pbar.set_postfix(pfix)
-                line += f" | Val Loss: {val_loss:.4e}" + (" BEST" if is_best else "")
-                line += f" | Time Elapsed: {time_string(time.time() - start_time)}"
-
+            # EMA update
+            if val_loss_ema is None:
+                val_loss_ema = val_loss
             else:
-                best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
+                val_loss_ema = (1 - ema_alpha) * val_loss_ema + ema_alpha * val_loss
+
+            # Step scheduler on smoothed value
+            scheduler.step(val_loss_ema)
+
+            val_loss_list.append(val_loss)
+
+            is_best = val_loss < best_val_loss
+            if is_best:
+                best_epoch = epoch
+                best_val_loss = val_loss
+                best_weights = {
+                    k: v.detach().cpu() for k, v in model.state_dict().items()
+                }
+
+            pfix = {
+                "Train Loss": f"{epoch_loss:.{precision}e}",
+                "Val Loss": (
+                    f"{Color.RED}{val_loss:.4e}{Color.OFF}"
+                    if is_best
+                    else f"{val_loss:.4e}"
+                ),
+            }
+            pbar.set_postfix(pfix)
+            line += f" | Val Loss: {val_loss:.4e}" + (" BEST" if is_best else "")
+            line += f" | Time Elapsed: {time_string(time.time() - start_time)}"
 
             if not tqdm_enabled:
                 print(line, flush=True)

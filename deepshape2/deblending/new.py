@@ -150,16 +150,36 @@ def blendedness(blend_lin, target_lin, eps=1e-30):
 # ==========================================================================
 # 4. EVALUATION
 # ==========================================================================
-def _decode_from_mu(model, mu):
-    """Deterministic decode (z = mu).  None if no usable entry point."""
-    for name in ("decode", "decoder"):
-        fn = getattr(model, name, None)
-        if fn is None:
-            continue
+def _decode_from_mu(model, mu, inp=None):
+    """
+    Deterministic decode (z = mu).  Returns None if unavailable.
+
+    The mask_mode guard is essential: for VAE_mask, model.decoder(mu) returns
+    the MASK, not an image, and would otherwise be used silently.
+    """
+    fn = getattr(model, "decode", None)
+    if fn is not None:
+        if inp is not None:
+            try:
+                return fn(mu, inp)
+            except TypeError:
+                pass
+            except Exception:
+                return None
         try:
             return fn(mu)
         except Exception:
-            continue
+            pass
+
+    if getattr(model, "mask_mode", False):
+        return None  # never fall through in mask mode
+
+    dec = getattr(model, "decoder", None)
+    if dec is not None:
+        try:
+            return dec(mu)
+        except Exception:
+            pass
     return None
 
 
@@ -204,7 +224,7 @@ def evaluate(
         if isinstance(out, (tuple, list)):
             recon, mu = out[0], out[1]
             if deterministic:
-                det = _decode_from_mu(model, mu)
+                det = _decode_from_mu(model, mu, inp)
                 if det is not None:
                     recon = det
             mu_std_acc += float(mu.std(0).mean())
@@ -319,7 +339,7 @@ def validation_loss(
         if isinstance(out, (tuple, list)):
             recon, mu = out[0], out[1]
             if deterministic:
-                det = _decode_from_mu(model, mu)
+                det = _decode_from_mu(model, mu, inp)
                 if det is not None:
                     recon = det
         else:

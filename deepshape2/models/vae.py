@@ -302,9 +302,6 @@ class VAE_mask(nn.Module):
     ):
         super().__init__()
 
-        # MultiHeadSelfAttention2D is defined alongside the original VAE.
-        from deepshape2.models.deblender import MultiHeadSelfAttention2D  # noqa
-
         self.expected_image_shape = (1, 128, 128)
         self.channels = 16
         self.latent_dim_1 = 512

@@ -562,6 +562,26 @@ def _selection_score(stats, select_by):
     return float("inf") if not np.isfinite(v) else sign * v
 
 
+def _improved(score, best, min_rel=0.0):
+    """
+    True when `score` (lower is better) beats `best` by the required margin.
+
+    Handles the first epoch explicitly, where best is +inf.  The naive test
+    `(best - score) > min_rel * abs(best)` fails there for both settings:
+    with min_rel=0 the right side is 0*inf = nan (every comparison against
+    nan is False), and with min_rel>0 it is inf (inf > inf is False).  The
+    result was that is_best never fired, best_weights stayed None, and
+    best_score never left inf, so the run could never recover.
+    """
+    if not np.isfinite(score):
+        return False
+    if not np.isfinite(best):
+        return True  # first finite score always wins
+    if min_rel <= 0:
+        return score < best
+    return score < best - min_rel * abs(best)
+
+
 # ==========================================================================
 # TRAINING
 # ==========================================================================
@@ -606,11 +626,12 @@ def train(
     clip_grad = kwargs.get("clip_grad", None)
     deterministic_val = kwargs.get("deterministic_val", True)
     scale_fac = kwargs.get("scale_fac", 5e7)
-    # --- New: checkpoint selection ---
+    # --- Checkpoint selection ---
     select_by = kwargs.get("select_by", "psnr_mean")
-    # Subset metrics are noisier than a mean over the full set (e_rms_bln uses
-    # ~21k stamps, psnr_mean ~205k), so an improvement margin stops the "best"
-    # checkpoint bouncing on differences that are not real.  Fractional.
+    # Fraction of |best_score|.  NOTE the scale differs per metric: for
+    # psnr_mean the score is ~ -58, so 0.02 would demand a 1.16 dB gain
+    # (far too strict) -- use 0.0 there.  For e_rms_bln the score is ~0.031,
+    # so 0.02 demands ~6e-4, which is the intended noise guard.
     min_rel_improve = kwargs.get("min_rel_improve", 0.0)
 
     if select_by not in SELECT_METRICS:
@@ -659,6 +680,12 @@ def train(
                 f"  NOTE: checkpoint was selected by {prev_select!r}, now "
                 f"{select_by!r}; resetting the best score."
             )
+            best_score = np.inf
+        # A checkpoint written by the buggy version has best_weights=None with
+        # a finite best_score; that combination can never be repaired by
+        # resuming, so force the next finite score to win.
+        if best_weights is None and np.isfinite(best_score):
+            print("  NOTE: checkpoint has best_weights=None; resetting best_score.")
             best_score = np.inf
         if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
@@ -812,8 +839,7 @@ def train(
                 best_val_loss = min(best_val_loss, val_loss)
 
                 score = _selection_score(vs, select_by)
-                improved = (best_score - score) > min_rel_improve * abs(best_score)
-                is_best = improved and np.isfinite(score)
+                is_best = _improved(score, best_score, min_rel_improve)
                 if is_best:
                     best_epoch = epoch
                     best_score = score
@@ -882,7 +908,6 @@ def train(
                     "psnr_med_list": psnr_med_list,
                     "pc_med_list": pc_med_list,
                     "e_rms_list": e_rms_list,
-                    # --- added, nothing removed ---
                     "e_rms_iso_list": e_rms_iso_list,
                     "e_rms_bln_list": e_rms_bln_list,
                     "select_by": select_by,
@@ -905,10 +930,11 @@ def train(
 
     if val_loader and val_loss_list:
         bi = min(best_epoch, len(train_loss_list) - 1)
+        bv = min(best_epoch, len(val_loss_list) - 1)
         print(
             f"Training completed in {time_string(total_time)}\n"
             f"Best ({select_by}) at Epoch {best_epoch + 1}\n"
-            f"  PSNR mean {-val_loss_list[min(best_epoch, len(val_loss_list) - 1)]:.3f} | "
+            f"  PSNR mean {-val_loss_list[bv]:.3f} | "
             f"med {psnr_med_list[bi]:.3f} | central {pc_med_list[bi]:.3f}\n"
             f"  |de| rms {e_rms_list[bi]:.3e} | iso {e_rms_iso_list[bi]:.3e} | "
             f"bln {e_rms_bln_list[bi]:.3e}\n"
@@ -916,6 +942,11 @@ def train(
             f"Recon={recon_loss_list[bi]:.{precision}e}, "
             f"KL={kl_loss_list[bi]:.{precision}e}"
         )
+        if best_weights is None:
+            print(
+                "  !!!!! WARNING: best_weights is None -- no epoch was ever "
+                "selected. Check select_by and min_rel_improve."
+            )
     elif train_loss_list:
         best_idx = train_loss_list.index(min(train_loss_list))
         print(

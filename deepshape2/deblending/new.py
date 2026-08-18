@@ -311,83 +311,6 @@ def evaluate(
     return stats
 
 
-@torch.inference_mode()
-def validation_loss(
-    model,
-    val_loader,
-    device,
-    scale_fac,
-    deterministic=True,
-    return_stats=False,
-    mask_radius=None,
-    soft_mask=False,
-):
-    """
-    Mean negative PSNR (lower is better) -- the scheduler / checkpoint signal.
-
-    Kept lightweight for the per-epoch path.  Non-finite values are dropped:
-    an unblended stamp can give ~zero MSE -> inf, which poisons the mean.
-    """
-    model.eval()
-    P, PC, D1, D2 = [], [], [], []
-
-    for inp, target in val_loader:
-        inp = inp.to(device, non_blocking=True)
-        target = target.to(device, non_blocking=True)
-
-        out = model(inp)
-        if isinstance(out, (tuple, list)):
-            recon, mu = out[0], out[1]
-            if deterministic:
-                det = _decode_from_mu(model, mu, inp)
-                if det is not None:
-                    recon = det
-        else:
-            recon = out
-
-        t_lin = torch.sinh(target) / scale_fac
-        r_lin = torch.sinh(recon) / scale_fac
-        P.append(psnr_torch(t_lin, r_lin))
-
-        if return_stats:
-            m = get_circ_mask(
-                target.shape[2],
-                target.shape[3],
-                target.device,
-                target.dtype,
-                mask_radius,
-                soft_mask,
-            )
-            PC.append(psnr_torch(t_lin * m, r_lin * m))
-            e1t, e2t, _ = moments(t_lin)
-            e1r, e2r, _ = moments(r_lin)
-            D1.append(e1r - e1t)
-            D2.append(e2r - e2t)
-
-    P = torch.cat(P)
-    ok = torch.isfinite(P)
-    val = float(-P[ok].mean()) if ok.any() else float("nan")
-
-    if not return_stats:
-        return val
-
-    p = P[ok]
-    PC = torch.cat(PC)
-    pc = PC[torch.isfinite(PC)]
-    D1, D2 = torch.cat(D1)[ok], torch.cat(D2)[ok]
-    stats = {
-        "psnr_mean": float(p.mean()),
-        "psnr_med": float(p.median()),
-        "psnr_p05": float(torch.quantile(p, 0.05)),
-        "pc_med": float(pc.median()) if pc.numel() else float("nan"),
-        "e_rms": float(torch.sqrt((D1**2 + D2**2).mean())),
-        "e1_bias": float(D1.mean()),
-        "e2_bias": float(D2.mean()),
-        "n_dropped": int((~ok).sum()),
-    }
-    return val, stats
-
-
 class IdentityDeblender(torch.nn.Module):
     """Baseline: returns the blended input unchanged, with the VAE interface."""
 
@@ -487,6 +410,162 @@ def report_evaluation(
 # ==========================================================================
 # 5. TRAINING
 # ==========================================================================
+"""
+Updated validation_loss + train.
+
+Backwards compatibility:
+  * validation_loss returns the same float (mean negative PSNR) and, with
+    return_stats=True, a superset of the old keys.  `val` is still computed
+    from the PSNR-finite mask alone, so old numbers reproduce exactly.
+  * train keeps its signature and returns
+    (best_weights, train_loss_list, val_loss_list).
+  * select_by defaults to "psnr_mean", which reproduces the old selection
+    behaviour bit for bit (score = -psnr_mean = val_loss).
+  * best_val_loss / val_loss_list keep tracking mean PSNR regardless of the
+    selection metric, so downstream scripts are unaffected.
+"""
+
+
+# ==========================================================================
+# VALIDATION
+# ==========================================================================
+@torch.inference_mode()
+def validation_loss(
+    model,
+    val_loader,
+    device,
+    scale_fac,
+    deterministic=True,
+    return_stats=False,
+    mask_radius=None,
+    soft_mask=False,
+    iso_thresh=0.01,
+    blend_thresh=0.05,
+):
+    """
+    Mean negative PSNR (lower is better) -- the scheduler signal.
+
+    With return_stats=True, also returns shape metrics split by blendedness.
+    The split matters for checkpoint selection: mean PSNR is dominated by the
+    ~78% near-isolated stamps, where every model scores well, while the ~11%
+    blended stamps carry ~30x more shape error and are the reason the
+    deblender exists.
+
+    Non-finite values are dropped: an unblended stamp can give ~zero MSE ->
+    inf, which poisons the mean.
+    """
+    model.eval()
+    P, PC, D1, D2, BL = [], [], [], [], []
+
+    for inp, target in val_loader:
+        inp = inp.to(device, non_blocking=True)
+        target = target.to(device, non_blocking=True)
+
+        out = model(inp)
+        if isinstance(out, (tuple, list)):
+            recon, mu = out[0], out[1]
+            if deterministic:
+                det = _decode_from_mu(model, mu, inp)
+                if det is not None:
+                    recon = det
+        else:
+            recon = out
+
+        t_lin = torch.sinh(target) / scale_fac
+        r_lin = torch.sinh(recon) / scale_fac
+        P.append(psnr_torch(t_lin, r_lin))
+
+        if return_stats:
+            m = get_circ_mask(
+                target.shape[2],
+                target.shape[3],
+                target.device,
+                target.dtype,
+                mask_radius,
+                soft_mask,
+            )
+            PC.append(psnr_torch(t_lin * m, r_lin * m))
+            e1t, e2t, _ = moments(t_lin)
+            e1r, e2r, _ = moments(r_lin)
+            D1.append(e1r - e1t)
+            D2.append(e2r - e2t)
+            BL.append(blendedness(torch.sinh(inp) / scale_fac, t_lin))
+
+    P = torch.cat(P)
+    ok = torch.isfinite(P)
+    val = float(-P[ok].mean()) if ok.any() else float("nan")
+
+    if not return_stats:
+        return val
+
+    p = P[ok]
+    PC = torch.cat(PC)
+    pc = PC[torch.isfinite(PC)]
+
+    D1, D2, BL = torch.cat(D1), torch.cat(D2), torch.cat(BL)
+    # Separate mask for the shape metrics: a stamp can have finite PSNR but a
+    # degenerate moment measurement.  `val` above is untouched by this.
+    ok2 = ok & torch.isfinite(D1) & torch.isfinite(D2) & torch.isfinite(BL)
+    d1, d2, bl = D1[ok2], D2[ok2], BL[ok2]
+    de2 = d1**2 + d2**2
+    dmag = torch.sqrt(de2)
+
+    iso = bl < iso_thresh
+    bln = bl > blend_thresh
+
+    def _rms(sel):
+        return float(torch.sqrt(de2[sel].mean())) if sel.any() else float("nan")
+
+    def _med(sel):
+        return float(dmag[sel].median()) if sel.any() else float("nan")
+
+    stats = {
+        # --- original keys, unchanged meaning ---
+        "psnr_mean": float(p.mean()),
+        "psnr_med": float(p.median()),
+        "psnr_p05": float(torch.quantile(p, 0.05)),
+        "pc_med": float(pc.median()) if pc.numel() else float("nan"),
+        "e_rms": _rms(torch.ones_like(iso)),
+        "e1_bias": float(d1.mean()),
+        "e2_bias": float(d2.mean()),
+        "n_dropped": int((~ok).sum()),
+        # --- new: blendedness-stratified ---
+        "e_rms_iso": _rms(iso),
+        "e_rms_bln": _rms(bln),
+        "e_med_bln": _med(bln),
+        "e1_bias_bln": float(d1[bln].mean()) if bln.any() else float("nan"),
+        "e2_bias_bln": float(d2[bln].mean()) if bln.any() else float("nan"),
+        "n_iso": int(iso.sum()),
+        "n_bln": int(bln.sum()),
+    }
+    return val, stats
+
+
+# ==========================================================================
+# CHECKPOINT SELECTION
+# ==========================================================================
+# name -> (key in the stats dict, sign such that sign * value is LOWER-better)
+SELECT_METRICS = {
+    "psnr_mean": ("psnr_mean", -1.0),  # default; identical to the old behaviour
+    "psnr_med": ("psnr_med", -1.0),
+    "psnr_p05": ("psnr_p05", -1.0),
+    "pc_med": ("pc_med", -1.0),
+    "e_rms": ("e_rms", 1.0),
+    "e_rms_iso": ("e_rms_iso", 1.0),
+    "e_rms_bln": ("e_rms_bln", 1.0),  # the metric that measures deblending
+    "e_med_bln": ("e_med_bln", 1.0),  # less tail-sensitive than the rms
+}
+
+
+def _selection_score(stats, select_by):
+    key, sign = SELECT_METRICS[select_by]
+    v = stats.get(key, float("nan"))
+    return float("inf") if not np.isfinite(v) else sign * v
+
+
+# ==========================================================================
+# TRAINING
+# ==========================================================================
 def train(
     model,
     train_loader,
@@ -498,6 +577,7 @@ def train(
 ):
     start_time = time.time()
     best_val_loss = np.inf
+    best_score = np.inf
     best_weights = None
     current_epoch = 0
     best_epoch = 0
@@ -511,6 +591,7 @@ def train(
         [np.inf],
     )
     psnr_med_list, pc_med_list, e_rms_list = [], [], []
+    e_rms_iso_list, e_rms_bln_list = [], []
 
     # --- Config ---
     filename = kwargs.get("filename")
@@ -526,6 +607,15 @@ def train(
     clip_grad = kwargs.get("clip_grad", None)
     deterministic_val = kwargs.get("deterministic_val", True)
     scale_fac = kwargs.get("scale_fac", 5e7)
+    # --- New: checkpoint selection ---
+    select_by = kwargs.get("select_by", "psnr_mean")
+    # Subset metrics are noisier than a mean over the full set (e_rms_bln uses
+    # ~21k stamps, psnr_mean ~205k), so an improvement margin stops the "best"
+    # checkpoint bouncing on differences that are not real.  Fractional.
+    min_rel_improve = kwargs.get("min_rel_improve", 0.0)
+
+    if select_by not in SELECT_METRICS:
+        raise ValueError(f"select_by={select_by!r} not in {sorted(SELECT_METRICS)}")
 
     scheduler = None
     if scheduler_params:
@@ -538,6 +628,7 @@ def train(
         f"beta={beta} | alpha={alpha} | mask_radius={mask_radius} | "
         f"soft_mask={soft_mask} | clip_grad={clip_grad}"
     )
+    print(f"select_by={select_by} | min_rel_improve={min_rel_improve}")
 
     # --- Load checkpoint ---
     try:
@@ -553,9 +644,23 @@ def train(
         psnr_med_list = checkpoint.get("psnr_med_list", [])
         pc_med_list = checkpoint.get("pc_med_list", [])
         e_rms_list = checkpoint.get("e_rms_list", [])
+        e_rms_iso_list = checkpoint.get("e_rms_iso_list", [])
+        e_rms_bln_list = checkpoint.get("e_rms_bln_list", [])
         lr_list = checkpoint.get("lr_list", [])
         if not lr_list:
             lr_list = [np.inf]
+        # Resume the selection score.  If the checkpoint predates this field
+        # and we are selecting on mean PSNR, best_val_loss IS the old score.
+        best_score = checkpoint.get("best_score", np.inf)
+        if not np.isfinite(best_score):
+            best_score = best_val_loss if select_by == "psnr_mean" else np.inf
+        prev_select = checkpoint.get("select_by")
+        if prev_select is not None and prev_select != select_by:
+            print(
+                f"  NOTE: checkpoint was selected by {prev_select!r}, now "
+                f"{select_by!r}; resetting the best score."
+            )
+            best_score = np.inf
         if scheduler and "scheduler_state_dict" in checkpoint:
             scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
         print(f"Loaded checkpoint from epoch {current_epoch}")
@@ -610,6 +715,22 @@ def train(
                     recon = F.mse_loss(out, target)
                     kl = torch.tensor(0.0, device=device)
                     loss = recon
+
+                # Mask diagnostics, first batch of each epoch only.  On
+                # isolated stamps the mask should be ~1 almost everywhere;
+                # frac>0.99 climbing toward the isolated fraction (~0.78) is
+                # the identity behaviour this formulation is meant to produce.
+                if n_batches == 0 and hasattr(model, "predict_mask"):
+                    with torch.no_grad():
+                        mm = model.predict_mask(inp)
+                        on = target > 0
+                        print(
+                            f"  mask: on-source {mm[on].mean():.4f} | "
+                            f"off-source {mm[~on].mean():.4f} | "
+                            f"frac>0.99 {(mm > 0.99).float().mean():.4f} | "
+                            f"min {mm.min():.4f}",
+                            flush=True,
+                        )
 
                 loss.backward()
 
@@ -682,14 +803,25 @@ def train(
                 psnr_med_list.append(vs["psnr_med"])
                 pc_med_list.append(vs["pc_med"])
                 e_rms_list.append(vs["e_rms"])
+                e_rms_iso_list.append(vs["e_rms_iso"])
+                e_rms_bln_list.append(vs["e_rms_bln"])
 
                 if scheduler:
+                    # The scheduler still steps on mean PSNR: it is smoother
+                    # epoch-to-epoch than a subset shape metric, which matters
+                    # for a plateau detector.
                     scheduler.step(val_loss)
 
-                is_best = val_loss < best_val_loss
+                # Track the PSNR best regardless, so downstream scripts that
+                # read best_val_loss keep working.
+                best_val_loss = min(best_val_loss, val_loss)
+
+                score = _selection_score(vs, select_by)
+                improved = (best_score - score) > min_rel_improve * abs(best_score)
+                is_best = improved and np.isfinite(score)
                 if is_best:
                     best_epoch = epoch
-                    best_val_loss = val_loss
+                    best_score = score
                     best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
                 marker = f" {Color.RED}BEST{Color.OFF}" if is_best else ""
@@ -700,8 +832,14 @@ def train(
                 )
                 print(
                     f"  shape: |de| rms {vs['e_rms']:.3e} | "
-                    f"e1 bias {vs['e1_bias']:+.3e} | e2 bias {vs['e2_bias']:+.3e} | "
+                    f"iso {vs['e_rms_iso']:.3e} ({vs['n_iso']}) | "
+                    f"bln {vs['e_rms_bln']:.3e} ({vs['n_bln']}) | "
                     f"dropped {vs['n_dropped']}",
+                    flush=True,
+                )
+                print(
+                    f"  bias: e1 {vs['e1_bias']:+.3e} | e2 {vs['e2_bias']:+.3e} | "
+                    f"bln e1 {vs['e1_bias_bln']:+.3e} | bln e2 {vs['e2_bias_bln']:+.3e}",
                     flush=True,
                 )
 
@@ -709,7 +847,7 @@ def train(
                     {
                         "Loss": f"{epoch_loss:.{precision}e}",
                         "Val": f"{-val_loss:.2f} dB",
-                        "|de|": f"{vs['e_rms']:.2e}",
+                        "|de|bln": f"{vs['e_rms_bln']:.2e}",
                     }
                 )
             else:
@@ -745,6 +883,11 @@ def train(
                     "psnr_med_list": psnr_med_list,
                     "pc_med_list": pc_med_list,
                     "e_rms_list": e_rms_list,
+                    # --- added, nothing removed ---
+                    "e_rms_iso_list": e_rms_iso_list,
+                    "e_rms_bln_list": e_rms_bln_list,
+                    "select_by": select_by,
+                    "best_score": best_score,
                 }
                 if scheduler:
                     checkpoint_data["scheduler_state_dict"] = copy.deepcopy(
@@ -765,10 +908,11 @@ def train(
         bi = min(best_epoch, len(train_loss_list) - 1)
         print(
             f"Training completed in {time_string(total_time)}\n"
-            f"Best Val Loss at Epoch {best_epoch + 1}: "
-            f"{-min(val_loss_list):.3f} dB mean\n"
-            f"  PSNR med {psnr_med_list[bi]:.3f} | central {pc_med_list[bi]:.3f} | "
-            f"|de| rms {e_rms_list[bi]:.3e}\n"
+            f"Best ({select_by}) at Epoch {best_epoch + 1}\n"
+            f"  PSNR mean {-val_loss_list[min(best_epoch, len(val_loss_list) - 1)]:.3f} | "
+            f"med {psnr_med_list[bi]:.3f} | central {pc_med_list[bi]:.3f}\n"
+            f"  |de| rms {e_rms_list[bi]:.3e} | iso {e_rms_iso_list[bi]:.3e} | "
+            f"bln {e_rms_bln_list[bi]:.3e}\n"
             f"  Train={train_loss_list[bi]:.{precision}e}, "
             f"Recon={recon_loss_list[bi]:.{precision}e}, "
             f"KL={kl_loss_list[bi]:.{precision}e}"

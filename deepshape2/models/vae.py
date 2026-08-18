@@ -263,30 +263,53 @@ class VAE(nn.Module):
 
 
 # %%
+
+
 class VAE_mask(nn.Module):
     """
-    Same encoder/decoder topology as VAE, but the decoder head predicts a
-    per-pixel multiplicative mask in [0, m_max] which is applied to the input
-    in linear flux.
+    Deblender that predicts a per-pixel multiplicative mask in [0, m_max] and
+    applies it to the input in LINEAR flux.
+
+    Blends are additive, so target <= input pointwise and the optimal mask
+    exists exactly:  m* = target_linear / input_linear  in [0, 1].  The
+    formulation can therefore represent the perfect answer, and the identity
+    map (m = 1) is trivially reachable -- which matters because ~78% of stamps
+    are near-isolated, where "change nothing" is correct.
+
+    The mask is applied in linear flux, where scale_fac cancels:
+        (sinh(x)/s) * m * s = m * sinh(x)
+        recon_asinh = asinh(m * sinh(x_asinh))
+    Background pixels therefore come out exactly zero for free, since
+    sinh(0) = 0 regardless of what the mask predicts there.
 
     Args:
         latent_dim: latent width (16 matches the working VAE).
         bias, attention, variational: as in VAE.
         m_max: upper bound on the mask.  1.0 enforces recon <= input, which is
             physically correct for additive blends.  Values slightly above 1
-            (e.g. 1.05) give flux headroom if the deblender is allowed to
-            over-recover; only relax this if you see a systematic T_ratio < 1.
+            (e.g. 1.05) give flux headroom; only relax this if you see a
+            systematic T_ratio < 1.
         clamp_asinh: input is clamped to +/- this before sinh() to avoid
             overflow.  sinh(12) ~ 8e4, comfortably above any real stamp value.
-        identity_init: zero the final conv weights and set bias so the initial
-            mask is uniformly sigmoid(init_bias) ~ 0.98.  This starts training
-            at (near) identity, so the network only has to learn where to
-            subtract.  Gradients still flow, since the layer input is nonzero.
+        identity_init: zero the final conv weights and set its bias so the
+            initial mask is uniformly sigmoid(init_bias) ~ 0.98, i.e. training
+            starts at (near) identity.  Gradients still flow, since the layer
+            input is nonzero.
         init_bias: pre-sigmoid bias for identity_init.  4.0 -> 0.982.
+        input_skip: if True, the decoder stops at (channels, 128, 128) features
+            and a small refinement head sees those features CONCATENATED with
+            the raw input image.  m* has sharp edges exactly where the input
+            has sharp edges, and the input is the only full-resolution signal
+            available -- the decoder path has come through a 4x4 bottleneck,
+            which is the suspected reason blended stamps lag.
+        skip_hidden: width of that refinement head.
+
+    NOTE: with input_skip=False the module is parameter- and key-identical to
+    the previous version, so existing checkpoints load unchanged.
     """
 
-    # flag consumed by _decode_from_mu so it never falls through to
-    # self.decoder(mu) and silently return a mask as if it were an image
+    # Consumed by _decode_from_mu so it never falls through to
+    # self.decoder(mu) and silently returns a mask as if it were an image.
     mask_mode = True
 
     def __init__(
@@ -299,6 +322,8 @@ class VAE_mask(nn.Module):
         clamp_asinh=12.0,
         identity_init=True,
         init_bias=4.0,
+        input_skip=False,
+        skip_hidden=32,
     ):
         super().__init__()
 
@@ -311,6 +336,7 @@ class VAE_mask(nn.Module):
         self.variational = variational
         self.m_max = float(m_max)
         self.clamp_asinh = float(clamp_asinh)
+        self.input_skip = bool(input_skip)
 
         # Mask must be bounded in [0, 1]; sigmoid is not optional here.
         self.activation = nn.Sigmoid()
@@ -388,7 +414,9 @@ class VAE_mask(nn.Module):
             self.latent = nn.Linear(self.latent_dim_1, self.latent_dim)
 
         # ---------------- Decoder ----------------
-        self.decoder = nn.Sequential(
+        # Built as a list so the tail can be swapped without disturbing the
+        # indices (and therefore the state-dict keys) of everything above.
+        dec = [
             nn.Linear(self.latent_dim, self.latent_dim_1),
             nn.BatchNorm1d(self.latent_dim_1),
             nn.PReLU(),
@@ -448,12 +476,30 @@ class VAE_mask(nn.Module):
                 bias=self.bias,
             ),
             nn.PReLU(),
-            # Final: (128, 128) mask logits -> sigmoid
-            nn.ConvTranspose2d(
-                self.channels, 1, kernel_size=3, padding=1, bias=self.bias
-            ),
-            self.activation,
-        )
+        ]
+
+        if self.input_skip:
+            # Decoder stops at (channels, 128, 128) features; the head below
+            # sees them concatenated with the raw input image.
+            self.mask_head = nn.Sequential(
+                nn.Conv2d(self.channels + 1, skip_hidden, 3, padding=1, bias=self.bias),
+                nn.PReLU(),
+                nn.Conv2d(skip_hidden, skip_hidden, 3, padding=1, bias=self.bias),
+                nn.PReLU(),
+                nn.Conv2d(skip_hidden, 1, 3, padding=1, bias=self.bias),
+            )
+        else:
+            # Original tail: final ConvTranspose2d + sigmoid inside the
+            # Sequential, so keys match previous checkpoints exactly.
+            dec += [
+                nn.ConvTranspose2d(
+                    self.channels, 1, kernel_size=3, padding=1, bias=self.bias
+                ),
+                self.activation,
+            ]
+            self.mask_head = None
+
+        self.decoder = nn.Sequential(*dec)
 
         if identity_init:
             self._identity_init(init_bias)
@@ -465,13 +511,20 @@ class VAE_mask(nn.Module):
         uniform regardless of input, and bias it to sigmoid(init_bias) ~ 0.98.
 
         Zeroing the weights matters as much as the bias -- otherwise the
-        starting mask is identity plus noise, and the noise is exactly the
-        shape error you are trying to eliminate on isolated stamps.
+        starting mask is identity plus noise, and that noise is exactly the
+        shape error this formulation is meant to eliminate on isolated stamps.
         """
-        final = self.decoder[-2]  # ConvTranspose2d before the Sigmoid
+        final = self.mask_head[-1] if self.input_skip else self.decoder[-2]
         nn.init.zeros_(final.weight)
         if final.bias is not None:
             nn.init.constant_(final.bias, float(init_bias))
+
+    def _mask(self, z, x):
+        """Decode a latent into a mask, optionally refined by the raw input."""
+        h = self.decoder(z)
+        if not self.input_skip:
+            return h  # sigmoid already applied in-sequence
+        return torch.sigmoid(self.mask_head(torch.cat([h, x], dim=1)))
 
     def _apply_mask(self, x, m):
         """recon_asinh = asinh(m_max * m * sinh(x_asinh))."""
@@ -494,23 +547,22 @@ class VAE_mask(nn.Module):
         return self.latent(z1), None, None
 
     def predict_mask(self, x):
-        """The mask itself, for diagnostics. Deterministic (uses mu)."""
+        """The mask itself, for diagnostics.  Deterministic (uses mu)."""
         z1 = self.encoder(x)
         z = self.mu(z1) if self.variational else self.latent(z1)
-        return self.decoder(z)
+        return self._mask(z, x)
 
     def decode(self, z, x=None):
         """
         Decode a latent into a reconstruction.  The input image is REQUIRED:
-        the model predicts a mask, and the mask is meaningless without the
-        image it multiplies.
+        the model predicts a mask, and a mask is meaningless without the image
+        it multiplies.
         """
-        m = self.decoder(z)
         if x is None:
             raise ValueError(
                 "VAE_mask.decode needs the input image (recon = mask * input)."
             )
-        return self._apply_mask(x, m)
+        return self._apply_mask(x, self._mask(z, x))
 
     def forward(self, x):
         z1 = self.encoder(x)
@@ -519,8 +571,7 @@ class VAE_mask(nn.Module):
         else:
             z = self.latent(z1)
 
-        m = self.decoder(z)
-        xhat = self._apply_mask(x, m)
+        xhat = self._apply_mask(x, self._mask(z, x))
 
         if self.variational:
             return xhat, mu, logvar

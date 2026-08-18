@@ -5,7 +5,6 @@ import time
 import numpy as np
 import torch
 import torch.nn.functional as F
-from colorist import Color
 
 from deepshape2.utils import (
     get_progress_bar,
@@ -756,11 +755,7 @@ def train(
                         "Loss": f"{sum_loss / n_batches:.{precision}e}",
                         "Recon": f"{sum_recon / n_batches:.{precision}e}",
                         "KL": f"{sum_kl / n_batches:.{precision}e}",
-                        "LR": (
-                            f"{Color.RED}{current_lr:.2e}{Color.OFF}"
-                            if new_lr
-                            else f"{current_lr:.2e}"
-                        ),
+                        "LR": (f"{current_lr:.2e}*" if new_lr else f"{current_lr:.2e}"),
                     }
                 )
 
@@ -782,8 +777,8 @@ def train(
             )
             if min_gnorm == 0.0:
                 print(
-                    f"{Color.RED}  WARNING: gradient norm hit exactly zero -- "
-                    f"check the output activation for saturation.{Color.OFF}",
+                    "  !!!!! WARNING: gradient norm hit exactly zero -- "
+                    "check the output activation for saturation.",
                     flush=True,
                 )
 
@@ -824,7 +819,11 @@ def train(
                     best_score = score
                     best_weights = {k: v.cpu() for k, v in model.state_dict().items()}
 
-                marker = f" {Color.RED}BEST{Color.OFF}" if is_best else ""
+                sel_key = SELECT_METRICS[select_by][0]
+                marker = (
+                    f"   <<<<< BEST [{select_by}={vs[sel_key]:.4e}]" if is_best else ""
+                )
+
                 print(
                     f"  val: mean {vs['psnr_mean']:.2f} | med {vs['psnr_med']:.2f} | "
                     f"p05 {vs['psnr_p05']:.2f} | central {vs['pc_med']:.2f} dB{marker}",

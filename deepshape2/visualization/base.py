@@ -4,7 +4,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-__all__ = ["set_style", "savefig", "plot_losses"]
+__all__ = ["set_style", "savefig", "plot_losses", "plot_uvcoverage"]
 
 # Font Sizes to use
 SMALLER = 9
@@ -152,3 +152,45 @@ def plot_losses(
         savefig(fname, remove_bg=remove_bg)
     else:
         plt.show()
+
+
+def plot_uvcoverage(vis_list, ax=None, plot_file=None, title="UV coverage", **kwargs):
+    """Standard plot of uv coverage
+
+    :param vis_list:
+    :param plot_file:
+    :param kwargs:
+    :return:
+    """
+
+    for ivis, ovis in enumerate(vis_list):
+        gvis = ovis.where(ovis["flags"] == 0)
+        bvis = ovis.where(ovis["flags"] > 0)
+        u = np.array(gvis.uvw_lambda.sel(spatial="u").data.flat)
+        v = np.array(gvis.uvw_lambda.sel(spatial="v").data.flat)
+        if ivis == 0:
+            plt.plot(u, v, ".", color="b", markersize=0.2, label="Unflagged")
+        else:
+            plt.plot(
+                u,
+                v,
+                ".",
+                color="b",
+                markersize=0.2,
+            )
+
+        plt.plot(-u, -v, ".", color="b", markersize=0.2)
+        u = np.array(bvis.uvw_lambda.sel(spatial="u").data.flat)
+        v = np.array(bvis.uvw_lambda.sel(spatial="v").data.flat)
+        if ivis == 0:
+            plt.plot(u, v, ".", color="r", markersize=0.2, label="Flagged")
+        else:
+            plt.plot(u, v, ".", color="r", markersize=0.2)
+        plt.plot(-u, -v, ".", color="r", markersize=0.2)
+    plt.xlabel("U (wavelengths)")
+    plt.ylabel("V (wavelengths)")
+    plt.legend()
+    plt.title(title)
+    if plot_file is not None:
+        plt.savefig(plot_file)
+    plt.show(block=False)

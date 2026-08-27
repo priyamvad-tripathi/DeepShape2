@@ -8,3 +8,4 @@ from .misc import *
 from .models_io import load_model
 from .shape_functions import *
 from .torch_utils import *
+from .vis_utils import *

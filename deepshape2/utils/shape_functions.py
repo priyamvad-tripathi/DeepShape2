@@ -1,4 +1,6 @@
 # %%
+import math
+
 import galsim
 import numpy as np
 from astropy.stats import circmean, circstd, rayleightest
@@ -14,6 +16,8 @@ __all__ = [
     "wrap_angle",
     "pa_delta2",
     "compute_circular_stats",
+    "gaussian_weighted_moments",
+    "measure_array",
 ]
 
 # %% Shape measurement functions
@@ -246,3 +250,86 @@ def compute_circular_stats(pa_method, pa_ref):
         delta_deg=np.rad2deg(delta2) / 2.0,
         n=n,
     )
+
+
+# %%
+def gaussian_weighted_moments(img, sigma_init_px, n_iter=40, tol=1e-8):
+    """
+    HSM-style adaptive moments with an elliptical Gaussian weight.
+
+    Returns (xc, yc, Qxx, Qyy, Qxy) in pixel units, deconvolved from the
+    weight function under the Gaussian assumption:
+        Q_measured^-1 = Q_true^-1 + Q_weight^-1
+    """
+    ny, nx = img.shape
+    yy, xx = np.mgrid[:ny, :nx].astype(float)
+
+    iy, ix = np.unravel_index(np.argmax(img), img.shape)
+    xc, yc = float(ix), float(iy)
+    Q = np.array([[sigma_init_px**2, 0.0], [0.0, sigma_init_px**2]])
+
+    for _ in range(n_iter):
+        Qinv = np.linalg.inv(Q)
+        dx, dy = xx - xc, yy - yc
+        r2 = Qinv[0, 0] * dx * dx + 2 * Qinv[0, 1] * dx * dy + Qinv[1, 1] * dy * dy
+        w = np.exp(-0.5 * np.clip(r2, 0, 200))
+
+        wi = img * w
+        norm = wi.sum()
+
+        xc_new = (wi * xx).sum() / norm
+        yc_new = (wi * yy).sum() / norm
+        dx, dy = xx - xc_new, yy - yc_new
+        Qm = np.array(
+            [
+                [(wi * dx * dx).sum() / norm, (wi * dx * dy).sum() / norm],
+                [(wi * dx * dy).sum() / norm, (wi * dy * dy).sum() / norm],
+            ]
+        )
+
+        # Deconvolve the weight; fall back to the matched-weight result
+        # (Q = 2 Q_m) if the subtraction goes non-positive-definite.
+        try:
+            Qt = np.linalg.inv(np.linalg.inv(Qm) - np.linalg.inv(Q))
+            if np.linalg.det(Qt) <= 0 or Qt[0, 0] <= 0 or Qt[1, 1] <= 0:
+                raise np.linalg.LinAlgError
+        except np.linalg.LinAlgError:
+            Qt = 2.0 * Qm
+
+        shift = math.hypot(xc_new - xc, yc_new - yc)
+        dQ = np.abs(Qt - Q).max() / np.abs(Q).max()
+        xc, yc, Q = xc_new, yc_new, Qt
+        if shift < tol and dQ < tol:
+            break
+
+    return xc, yc, Q[0, 0], Q[1, 1], Q[0, 1]
+
+
+def measure_array(img, pixscale):
+    """Adaptive-moment shape of a single PSF stamp. Mirrors measure_psf()."""
+    img = np.asarray(img, dtype=np.float64)
+    ny, nx = img.shape
+
+    # Initial guess: 0.4" beam, the ILT ballpark.
+    sigma_init = max(0.4 / 2.3548 / pixscale, 1.5)
+    xc, yc, Qxx, Qyy, Qxy = gaussian_weighted_moments(img, sigma_init)
+
+    T = Qxx + Qyy
+    tr, det = T, Qxx * Qyy - Qxy**2
+    disc = max(tr * tr / 4.0 - det, 0.0)
+    lam1, lam2 = tr / 2.0 + math.sqrt(disc), tr / 2.0 - math.sqrt(disc)
+    f = 2.3548 * pixscale
+
+    return {
+        "e1": (Qxx - Qyy) / T,
+        "e2": 2.0 * Qxy / T,
+        "|e|": math.hypot((Qxx - Qyy) / T, 2.0 * Qxy / T),
+        "fwhm_maj_asec": f * math.sqrt(lam1),
+        "fwhm_min_asec": f * math.sqrt(max(lam2, 0.0)),
+        "pa_deg": 0.5 * math.degrees(math.atan2(2.0 * Qxy, Qxx - Qyy)),
+        "T_arcsec2": T * pixscale**2,
+        "peak": float(img.max()),
+        "min_sidelobe": float(img.min()),
+        "dx_px": xc - (nx / 2.0 - 0.5),
+        "dy_px": yc - (ny / 2.0 - 0.5),
+    }

@@ -1,22 +1,23 @@
 # %% Imports
+import gc
+
 import numpy as np
 import xarray
 from astropy import units as u
 from astropy.coordinates import SkyCoord
 from astropy.wcs import WCS
 from ska_sdp_datamodels.configuration import create_named_configuration
-from ska_sdp_datamodels.gridded_visibility import create_griddata_from_image
 from ska_sdp_datamodels.image import Image
 from ska_sdp_datamodels.science_data_model.polarisation_model import PolarisationFrame
 from ska_sdp_datamodels.visibility import create_visibility, export_visibility_to_ms
-from ska_sdp_func_python.grid_data import (
-    grid_visibility_weight_to_griddata,
-    griddata_visibility_reweight,
-)
 from ska_sdp_func_python.imaging import (
     create_image_from_visibility,
     invert_ng,
     predict_ng,
+)
+from ska_sdp_func_python.imaging.weighting import (
+    taper_visibility_gaussian,
+    weight_visibility,
 )
 from ska_sdp_func_python.util.coordinate_support import skycoord_to_lmn
 from ska_sdp_func_python.visibility import (
@@ -34,6 +35,7 @@ __all__ = [
     "predict_visibilities_from_array",
     "rephase_visibility",
     "simulate_visibilities",
+    "apply_uv_cut",
 ]
 
 # %% Load default configuration
@@ -196,14 +198,26 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     """
     Create a dirty image and optionally a PSF from visibilities.
 
+    The Briggs uv cell is 1/(npixel * cellsize), so the grid used to count
+    the uv density fixes the weighting, while the grid used for the inversion
+    only fixes the output image size. NPIX_grid lets the two differ: weight on
+    a large grid matching the reference imaging (e.g. WSClean's -size), then
+    invert onto a small grid holding just the PSF. The large model is freed
+    before the inversion, so it never coexists with the gridder's internals.
+
     Parameters
     ----------
     vis : xarray.Dataset
             Visibility dataset.
     NPIX : int
-            Number of pixels along each axis.
+            Number of pixels along each axis of the OUTPUT image.
+    NPIX_grid : int or None
+            Number of pixels along each axis of the grid used to compute the
+            imaging weights. If None (default) or equal to NPIX, a single
+            model is used for both weighting and inversion.
     cellsize : float
-            Pixel size in radians.
+            Pixel size in radians. Used for both grids, so NPIX_grid also
+            sets the weighting field of view.
     weighting : str
             'natural', 'uniform', or 'robust'.
     robustness : float
@@ -214,6 +228,8 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
             Verbosity level.
     do_wstacking : bool
             Use W-stacking in the imaging.
+    taper: float
+            Tapering parameter for imaging (in arcsec).
     do_psf : bool
             Also compute the PSF.
     asarray : bool
@@ -226,6 +242,7 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     """
 
     NPIX = kwargs.get("NPIX", 128)
+    NPIX_grid = kwargs.get("NPIX_grid", None)
     cellsize = kwargs.get("cellsize", CELLSIZE)
     weighting = kwargs.get("weighting", "robust")
     robustness = kwargs.get("robustness", -0.5)
@@ -236,23 +253,35 @@ def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
     do_dirty = kwargs.get("do_dirty", True)
     asarray = kwargs.get("asarray", True)
     threads = kwargs.get("threads", 20)
+    taper = kwargs.get("taper", None)
 
-    model = create_image_from_visibility(
-        vis, cellsize=cellsize, npixel=NPIX, override_cellsize=override_cellsize
-    )
+    decouple = NPIX_grid is not None and NPIX_grid != NPIX
 
-    # Compute grid weights and reweight visibilities
-    grid_weights = create_griddata_from_image(
-        model, polarisation_frame=model.image_acc.polarisation_frame
-    )
-    grid_weights = grid_visibility_weight_to_griddata(vis, grid_weights)
-    vis_reweighted = griddata_visibility_reweight(
+    # Grid used to count the uv density -> sets the Briggs weights.
+    model_w = create_image_from_visibility(
         vis,
-        grid_weights[0],
-        weighting=weighting,
-        robustness=robustness,
-        sumwt=grid_weights[1],
+        cellsize=cellsize,
+        npixel=NPIX_grid if decouple else NPIX,
+        override_cellsize=override_cellsize,
     )
+
+    vis_reweighted = weight_visibility(
+        vis, model=model_w, weighting=weighting, robustness=robustness
+    )
+
+    if decouple:
+        # Free the large weighting grid before the gridder allocates.
+        del model_w
+        gc.collect()
+        model = create_image_from_visibility(
+            vis, cellsize=cellsize, npixel=NPIX, override_cellsize=override_cellsize
+        )
+    else:
+        model = model_w
+
+    if taper is not None:
+        ARCSEC = np.pi / (180 * 3600)
+        vis_reweighted = taper_visibility_gaussian(vis_reweighted, beam=taper * ARCSEC)
 
     # Invert to obtain dirty image
     dirty_img, psf_img = None, None
@@ -353,7 +382,7 @@ def add_noise_to_visibility(vis: xarray.Dataset, **kwargs):
     noise_imag = np.random.normal(loc=0.0, scale=sigma_val, size=vis.vis.shape)
     noise = np.vectorize(complex)(noise_real, noise_imag)
 
-    noisy_vis = vis.copy(deep=True)
+    noisy_vis = vis.copy(deep=False)
     noisy_vis["vis"].data = vis.vis.data.copy() + noise
 
     if return_snr:
@@ -387,7 +416,7 @@ def rephase_visibility(
             New visibility dataset with updated vis and uvw (and phasecentre attr).
     """
 
-    newvis = vis.copy(deep=True)
+    newvis = vis.copy(deep=False)
 
     # --- Compute pixel offsets from image centre ---
     x_pix, y_pix = pix_loc
@@ -480,3 +509,77 @@ def simulate_visibilities(
         return vt_n, dirty_arr
 
     return vt_n
+
+
+# %%
+def apply_uv_cut(vis: xarray.Dataset, **kwargs):
+    """
+    Zero the imaging weights of visibilities outside a uv-distance range.
+
+    Mirrors WSClean's -minuv-l / -maxuv-l. Must be applied BEFORE Briggs
+    weighting, so the cut samples never enter the uv density counts.
+
+    Parameters
+    ----------
+    vis : xarray.Dataset
+            Visibility dataset to cut.
+    minuv_l : float or None
+            Lower uv-distance limit in wavelengths (default 80.0).
+    maxuv_l : float or None
+            Upper uv-distance limit in wavelengths (default None, no cut).
+    return_frac : bool
+            If True, return the fraction of samples cut alongside the dataset.
+    verbosity : int
+            If >0, print the cut fraction.
+    verify : bool
+            If True, re-read through flagged_imaging_weight and raise if any
+            weight inside the cut survived.
+
+    Returns
+    -------
+    cut_vis : xarray.Dataset
+            Copy of vis with the out-of-range weights zeroed.
+    frac : float (optional)
+            Fraction of samples cut (returned only if return_frac is True).
+    """
+
+    minuv_l = kwargs.get("minuv_l", 80.0)
+    maxuv_l = kwargs.get("maxuv_l", None)
+    return_frac = kwargs.get("return_frac", False)
+    verbosity = kwargs.get("verbosity", 0)
+    verify = kwargs.get("verify", True)
+
+    uvw = vis.visibility_acc.uvw_lambda
+    uvd = np.hypot(uvw[..., 0], uvw[..., 1])
+
+    mask = np.zeros(uvd.shape, dtype=bool)
+    if minuv_l is not None:
+        mask |= uvd < minuv_l
+    if maxuv_l is not None:
+        mask |= uvd > maxuv_l
+
+    cut_vis = vis.copy(deep=False)
+    for name in ("imaging_weight", "weight"):
+        if name in cut_vis:
+            cut_vis[name].data[mask] = 0.0
+
+    frac = float(mask.mean())
+
+    if verbosity > 0:
+        print(
+            f"uv cut [{minuv_l}, {maxuv_l}] lambda: {frac * 100:0.2f}% of "
+            f"samples zeroed"
+        )
+
+    if verify:
+        left = cut_vis.visibility_acc.flagged_imaging_weight[mask]
+        if left.size and np.abs(left).max() > 0:
+            raise RuntimeError(
+                f"uv cut did not take: max weight inside the cut is "
+                f"{np.abs(left).max():.3e}. Check which data_var holds the "
+                f"imaging weights on this Visibility."
+            )
+
+    if return_frac:
+        return cut_vis, frac
+    return cut_vis

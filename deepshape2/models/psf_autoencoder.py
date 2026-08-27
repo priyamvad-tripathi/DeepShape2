@@ -221,8 +221,6 @@ class PSFAutoencoder(nn.Module):
     n_aux : int
         Size of the supervised head on the latent.  Default 4 for
         (e1, e2, log T, min_sidelobe).  Set to 0 to disable.
-    symmetrise : bool
-        Enforce PSF(-x) = PSF(x) on the output.  Exact for Hermitian uv coverage.
     """
 
     def __init__(
@@ -234,14 +232,12 @@ class PSFAutoencoder(nn.Module):
         n_aux=4,
         softening=0.01,
         dropout=0.0,
-        symmetrise=True,
         **kwargs,
     ):
         super().__init__()
         assert len(channels) == len(blocks)
         self.expected_image_shape = (1, 128, 128)
         self.latent_dim = latent_dim
-        self.symmetrise = symmetrise
 
         self.scale = AsinhScale(softening)
         self.encoder = Encoder(channels, blocks, latent_dim, bottleneck_ch, dropout)
@@ -261,8 +257,6 @@ class PSFAutoencoder(nn.Module):
 
     def decode(self, z):
         y = self.decoder(z)
-        if self.symmetrise:
-            y = 0.5 * (y + torch.flip(y, dims=(-2, -1)))
         return y
 
     def forward(self, x, **kwargs):

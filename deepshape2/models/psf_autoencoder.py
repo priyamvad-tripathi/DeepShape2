@@ -26,8 +26,6 @@ ignore the latent.  Changes, in rough order of importance:
 Latent is a plain vector with no output activation, sized for FiLM conditioning.
 """
 
-import math
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -47,41 +45,41 @@ import torch.nn.functional as F
 # --------------------------------------------------------------------------- #
 
 
-def peak_normalise(x, eps=1e-12):
-    """Divide by the per-image peak.  Returns (normalised, peak).
+# def peak_normalise(x, eps=1e-12):
+#     """Divide by the per-image peak.  Returns (normalised, peak).
 
-    Peak -> exactly 1, sidelobes keep their sign, range is (-inf, 1].  Unlike
-    per-image min-max this does not tie the dynamic range to the deepest sidelobe
-    pixel, which is itself one of the quantities that varies across the facet
-    family (and between SKA-MID and ILT).
-    """
-    peak = x.amax(dim=(-2, -1), keepdim=True).clamp_min(eps)
-    return x / peak, peak
+#     Peak -> exactly 1, sidelobes keep their sign, range is (-inf, 1].  Unlike
+#     per-image min-max this does not tie the dynamic range to the deepest sidelobe
+#     pixel, which is itself one of the quantities that varies across the facet
+#     family (and between SKA-MID and ILT).
+#     """
+#     peak = x.amax(dim=(-2, -1), keepdim=True).clamp_min(eps)
+#     return x / peak, peak
 
 
-class AsinhScale(nn.Module):
-    """Signed log-like compression that fixes t(1) = 1 and t(0) = 0.
+# class AsinhScale(nn.Module):
+#     """Signed log-like compression that fixes t(1) = 1 and t(0) = 0.
 
-    t(x) = asinh(x / s) / asinh(1 / s)
+#     t(x) = asinh(x / s) / asinh(1 / s)
 
-    Preserves the (-inf, 1] range of peak-normalised data while giving a -5%
-    sidelobe (s = 0.01) a value of -0.44 instead of -0.05, i.e. ~9x the gradient
-    weight under MSE.  Plain MSE on linear peak-normalised PSFs is dominated by a
-    handful of core pixels and the sidelobe structure is effectively unsupervised.
-    """
+#     Preserves the (-inf, 1] range of peak-normalised data while giving a -5%
+#     sidelobe (s = 0.01) a value of -0.44 instead of -0.05, i.e. ~9x the gradient
+#     weight under MSE.  Plain MSE on linear peak-normalised PSFs is dominated by a
+#     handful of core pixels and the sidelobe structure is effectively unsupervised.
+#     """
 
-    def __init__(self, softening=0.01):
-        super().__init__()
-        self.softening = float(softening)
-        self.register_buffer(
-            "norm", torch.tensor(math.asinh(1.0 / self.softening)), persistent=False
-        )
+#     def __init__(self, softening=0.01):
+#         super().__init__()
+#         self.softening = float(softening)
+#         self.register_buffer(
+#             "norm", torch.tensor(math.asinh(1.0 / self.softening)), persistent=False
+#         )
 
-    def forward(self, x):
-        return torch.asinh(x / self.softening) / self.norm
+#     def forward(self, x):
+#         return torch.asinh(x / self.softening) / self.norm
 
-    def inverse(self, y):
-        return self.softening * torch.sinh(y * self.norm)
+#     def inverse(self, y):
+#         return self.softening * torch.sinh(y * self.norm)
 
 
 # --------------------------------------------------------------------------- #
@@ -239,7 +237,6 @@ class PSFAutoencoder(nn.Module):
         self.expected_image_shape = (1, 128, 128)
         self.latent_dim = latent_dim
 
-        self.scale = AsinhScale(softening)
         self.encoder = Encoder(channels, blocks, latent_dim, bottleneck_ch, dropout)
         self.decoder = Decoder(channels, blocks, latent_dim, bottleneck_ch, dropout)
 
@@ -268,15 +265,15 @@ class PSFAutoencoder(nn.Module):
 
     # -- convenience ------------------------------------------------------- #
 
-    @torch.no_grad()
-    def embed(self, psf_raw, **kwargs):
-        """Raw PSF stamps -> latent.  Applies peak normalisation and asinh."""
-        x, _ = peak_normalise(psf_raw)
-        return self.encode(self.scale(x))
+    # @torch.no_grad()
+    # def embed(self, psf_raw, **kwargs):
+    #     """Raw PSF stamps -> latent.  Applies peak normalisation and asinh."""
+    #     x, _ = peak_normalise(psf_raw)
+    #     return self.encode(self.scale(x))
 
-    def to_linear(self, y):
-        """asinh-space -> peak-normalised linear."""
-        return self.scale.inverse(y)
+    # def to_linear(self, y):
+    #     """asinh-space -> peak-normalised linear."""
+    #     return self.scale.inverse(y)
 
 
 # --------------------------------------------------------------------------- #

@@ -635,3 +635,148 @@ def dataloader(
             drop_last=True,
         )
         return loader
+
+
+# %%
+class PSFDataset(Dataset):
+    """PSF stamps from HDF5, optionally with aux targets.
+
+    Yields `x` (1, H, W), or `(x, aux)` when `aux_key` is set.
+
+    Parameters
+    ----------
+    aux_key : str or None
+        Dataset holding the (N, 3) targets [e1, e2, log T].  e1/e2 must be the
+        first two columns; evaluate() builds probe_e from the leading entries.
+    peak_scale : bool, default False
+        Divide by the per-stamp peak.  Off by default since the stamps are
+        already peak-normalised by construction; turn it on for data where that
+        is not guaranteed.  This is not min-max: min-max ties the scale to the
+        deepest sidelobe, which is itself one of the quantities that varies
+        across the population and between instruments.
+    indices : array-like or None
+        Row subset, for train/val splits out of a single file.
+    transform : callable or None
+        Called as `transform(x)` without aux, or `transform(x, aux)` with, and
+        must return the same arity.
+    """
+
+    def __init__(
+        self,
+        path,
+        x_key="psf",
+        aux_key=None,
+        transform=None,
+        peak_scale=False,
+        indices=None,
+    ):
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"HDF5 file not found: {path}")
+
+        self.path = path
+        self.x_key = x_key
+        self.aux_key = aux_key
+        self.transform = transform
+        self.peak_scale = peak_scale
+        self._hf = None
+
+        with h5py.File(path, "r") as f:
+            n = len(f[x_key])
+            if aux_key is not None and len(f[aux_key]) != n:
+                raise ValueError(
+                    f"{aux_key} has {len(f[aux_key])} rows, {x_key} has {n}"
+                )
+        self.indices = np.arange(n) if indices is None else np.asarray(indices)
+
+    @property
+    def hf(self):
+        # Opened lazily so each DataLoader worker gets its own handle.  An h5py
+        # File created in __init__ is inherited across the fork and shared
+        # between workers, which returns silently wrong data.
+        if self._hf is None:
+            self._hf = h5py.File(self.path, "r")
+        return self._hf
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_hf"] = None
+        return state
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, i):
+        j = int(self.indices[i])
+
+        x = torch.from_numpy(np.asarray(self.hf[self.x_key][j])).float()
+        if x.ndim == 2:
+            x = x[None]
+        if self.peak_scale:
+            x = x / x.amax().clamp_min(1e-12)
+
+        if self.aux_key is None:
+            return self.transform(x) if self.transform else x
+
+        aux = torch.from_numpy(np.asarray(self.hf[self.aux_key][j])).float()
+        if self.transform:
+            x, aux = self.transform(x, aux)
+        return x, aux
+
+    def close(self):
+        if self._hf is not None:
+            self._hf.close()
+            self._hf = None
+
+    def __del__(self):
+        self.close()
+
+
+class RandomD4:
+    """Dihedral augmentation that preserves the peak pixel and rotates (e1, e2).
+
+    Exact -- no interpolation, so it is safe at ILT sampling where the beam is
+    only ~4 px FWHM and resampling is marginal.  Covers 8 of the group elements
+    only; if the network needs finer PA coverage it has to come from simulation.
+
+    Two things this handles that hand-rolled versions usually do not:
+
+    * Centring.  torch.rot90 and torch.flip reverse an index as i -> n-1-i, so
+      on a 128-px stamp a peak on pixel 64 lands on 63.  Each reversed axis is
+      rolled back by one.  (This is the same off-by-one that halved the peak
+      when it appeared in the output symmetrisation.)
+    * Ellipticity is spin-2, so it must transform with the stamp.  A rotation by
+      90 deg maps e -> -e; 180 deg leaves it unchanged; a mirror flips the sign
+      of e2 only.  Rotating the image while leaving the target fixed trains the
+      aux head against a label uncorrelated with its input, which is worse than
+      having no aux head at all.
+    """
+
+    def __init__(self, rotate=True, flip=True):
+        self.rotate = rotate
+        self.flip = flip
+
+    def __call__(self, x, aux=None):
+        k = int(torch.randint(4, ())) if self.rotate else 0
+        do_flip = bool(torch.randint(2, ())) if self.flip else False
+
+        if k:
+            x = torch.rot90(x, k, (-2, -1))
+            # rot90 reverses dim -2 for k=1, both dims for k=2, dim -1 for k=3
+            shifts, dims = {
+                1: ((1,), (-2,)),
+                2: ((1, 1), (-2, -1)),
+                3: ((1,), (-1,)),
+            }[k]
+            x = torch.roll(x, shifts, dims)
+        if do_flip:
+            x = torch.roll(torch.flip(x, (-1,)), 1, -1)
+
+        if aux is None:
+            return x
+
+        aux = aux.clone()
+        if k % 2:  # 90 or 270 deg: e -> -e
+            aux[0], aux[1] = -aux[0], -aux[1]
+        if do_flip:  # mirror: e2 -> -e2
+            aux[1] = -aux[1]
+        return x, aux

@@ -36,6 +36,7 @@ __all__ = [
     "rephase_visibility",
     "simulate_visibilities",
     "apply_uv_cut",
+    "_image_to_rascil",
 ]
 
 # %% Load default configuration
@@ -129,69 +130,155 @@ def create_visibility_template(phasecentre, tel="MID", rmax=None, **kwargs):
 
 def _image_to_rascil(image_array, phasecentre, **kwargs):
     """
-    Helper: convert a 2D image array to a RASCIL Image with WCS and polarisation.
-    Expects 'cellsize', 'frequency', and 'channel_bandwidth' in kwargs.
+    Convert a sky image to a RASCIL Image with WCS and polarisation frame.
+
+    Parameters
+    ----------
+    image_array : ndarray
+        Either (ny, nx) for a single channel, or (nchan, ny, nx) for a cube
+        already sampled at `frequency`.
+    phasecentre : SkyCoord
+        Phase centre; becomes CRVAL1/2.
+
+    Keyword Arguments
+    -----------------
+    cellsize : float
+        Pixel size in radians.
+    frequency : float or ndarray
+        Channel centre frequencies in Hz. Only the first `nchan` are used.
+    channel_bandwidth : float or ndarray
+        Channel widths in Hz. Sets the FREQ cdelt when nchan == 1; for
+        nchan > 1 the cdelt is the channel spacing taken from `frequency`.
+    nchan : int or None
+        Number of channels in the output Image. None (default) means "match
+        the input array", so a 2D input gives a single-channel Image. Setting
+        nchan > 1 with a 2D input replicates the plane across channels.
+    spectral_index : float
+        Only used when replicating a 2D input across nchan > 1. Flux is scaled
+        by (nu / nu_ref) ** spectral_index with nu_ref = frequency[0].
+        Default 0.0, i.e. a flat spectrum.
+
+    Returns
+    -------
+    Image
+
     """
     cellsize = kwargs.get("cellsize", CELLSIZE)
     frequency = kwargs.get("frequency", FREQUENCY)
     channel_bandwidth = kwargs.get("channel_bandwidth", BANDWIDTH)
+    nchan = kwargs.get("nchan", None)
+    spectral_index = kwargs.get("spectral_index", 0.0)
 
-    if not isinstance(frequency, float):
-        frequency = float(frequency[0])
+    frequency = np.atleast_1d(np.asarray(frequency, dtype=float))
+    channel_bandwidth = np.atleast_1d(np.asarray(channel_bandwidth, dtype=float))
 
-    ny, nx = image_array.shape
-    image = image_array.reshape([1, 1, ny, nx])
+    arr = np.asarray(image_array)
+    if arr.ndim == 2:
+        arr = arr[np.newaxis, :, :]
+    elif arr.ndim != 3:
+        raise ValueError(
+            f"image_array must be (ny, nx) or (nchan, ny, nx), got {arr.shape}"
+        )
+
+    n_in, ny, nx = arr.shape
+    if nchan is None:
+        nchan = n_in
+
+    if nchan > len(frequency):
+        raise ValueError(
+            f"nchan={nchan} but only {len(frequency)} frequencies supplied"
+        )
+
+    if n_in == nchan:
+        image = arr.astype(np.float64, copy=True)
+    elif n_in == 1:
+        # replicate the single plane, optionally with a power-law spectrum
+        scale = (frequency[:nchan] / frequency[0]) ** float(spectral_index)
+        image = arr.astype(np.float64, copy=True) * scale[:, None, None]
+    else:
+        raise ValueError(
+            f"cannot map {n_in} input channels onto nchan={nchan}; supply "
+            f"either 1 plane or exactly {nchan}"
+        )
+
     np.nan_to_num(image, copy=False)
+    image = image.reshape(nchan, 1, ny, nx)  # (nchan, npol, ny, nx)
+
+    # FREQ axis: cdelt is the channel spacing when there is more than one
+    # channel, and falls back to the channel width for a single channel.
+    if nchan > 1:
+        dfreq = float(frequency[1] - frequency[0])
+        spacing = np.diff(frequency[:nchan])
+        if not np.allclose(spacing, dfreq, rtol=1e-6):
+            raise ValueError(
+                "frequency axis must be evenly spaced for a WCS FREQ axis; "
+                f"got spacings {spacing}"
+            )
+    else:
+        dfreq = float(channel_bandwidth[0])
 
     cellsize_deg = cellsize * 180.0 / np.pi
 
     w = WCS(naxis=4)
-    w.wcs.crval = [phasecentre.ra.deg, phasecentre.dec.deg, 0, frequency]
+    w.wcs.crval = [phasecentre.ra.deg, phasecentre.dec.deg, 0, float(frequency[0])]
     w.wcs.ctype = ["RA---SIN", "DEC--SIN", "STOKES", "FREQ"]
-    w.wcs.cdelt = [-cellsize_deg, +cellsize_deg, 1, channel_bandwidth]
+    w.wcs.cdelt = [-cellsize_deg, +cellsize_deg, 1, dfreq]
     w.wcs.radesys = "ICRS"
     w.wcs.equinox = 2000.0
-    w.wcs.crpix = [ny // 2 + 1, nx // 2 + 1, 1, 1]
+    w.wcs.crpix = [nx // 2 + 1, ny // 2 + 1, 1, 1]  # WCS order is (x, y, ...)
 
-    polarisation_frame = PolarisationFrame("stokesI")
     return Image.constructor(
-        image, wcs=w, polarisation_frame=polarisation_frame, clean_beam=None
+        image,
+        wcs=w,
+        polarisation_frame=PolarisationFrame("stokesI"),
+        clean_beam=None,
     )
 
 
 def predict_visibilities_from_array(image_array, ra_deg, dec_deg, **kwargs):
     """
-    Predict visibilities from a 2D image array.
+    Predict visibilities from a sky image.
 
     Parameters
     ----------
     image_array : ndarray
-        2D sky image (ny, nx).
+        (ny, nx) or (nchan, ny, nx) sky image in Jy/pixel.
     ra_deg, dec_deg : float
-        Phase centre coordinates in degrees.
-    kwargs : dict
-        Additional parameters passed to create_visibility_set or predict_ng.
+        Phase centre in degrees.
+
+    Keyword Arguments
+    -----------------
+    nchan : int or None
+        Channels in the model Image. None (default) matches the input array,
+        so a 2D image gives a single-channel model and predict_ng maps every
+        visibility channel onto it (flat spectrum).
+    spectral_index : float
+        Power-law index used when replicating a 2D image across nchan > 1.
+    vis : xarray.Dataset or None
+        Predict onto this template instead of building a new one. Use it when
+        the weights or uv cut have already been set up.
+    Remaining kwargs are forwarded to _image_to_rascil and
+    create_visibility_template (cellsize, frequency, channel_bandwidth,
+    ha_interval, integration_time, tel, rmax, ...).
 
     Returns
     -------
     xarray.Dataset
-        Predicted visibilities.
     """
-
     verbosity = kwargs.get("verbosity", 0)
     threads = kwargs.get("threads", 20)
+    vis = kwargs.pop("vis", None)
 
     phasecentre = SkyCoord(
         ra=ra_deg * u.deg, dec=dec_deg * u.deg, frame="icrs", equinox="J2000"
     )
 
-    # Predict visibilities onto provided visibility template
     im = _image_to_rascil(image_array, phasecentre, **kwargs)
 
-    visibility_template = create_visibility_template(phasecentre, **kwargs)
+    if vis is None:
+        vis = create_visibility_template(phasecentre, **kwargs)
 
-    vt = predict_ng(visibility_template, im, verbosity=verbosity, threads=threads)
-    return vt
+    return predict_ng(vis, im, verbosity=verbosity, threads=threads)
 
 
 def make_dirty_image_and_psf(vis: xarray.Dataset, **kwargs):
@@ -380,7 +467,8 @@ def add_noise_to_visibility(vis: xarray.Dataset, **kwargs):
     # Generate complex Gaussian noise (real and imaginary parts)
     noise_real = np.random.normal(loc=0.0, scale=sigma_val, size=vis.vis.shape)
     noise_imag = np.random.normal(loc=0.0, scale=sigma_val, size=vis.vis.shape)
-    noise = np.vectorize(complex)(noise_real, noise_imag)
+    # noise = np.vectorize(complex)(noise_real, noise_imag)
+    noise = noise_real + 1j * noise_imag
 
     noisy_vis = vis.copy(deep=False)
     noisy_vis["vis"].data = vis.vis.data.copy() + noise

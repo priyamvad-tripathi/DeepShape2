@@ -13,6 +13,7 @@ __all__ = [
     "print_peak",
     "extract_cutouts",
     "calculate_dirty_peak",
+    "extract_stamps",
 ]
 
 # %% Image extraction functions
@@ -129,6 +130,88 @@ def centers_to_limits(centers, stamp_size):
     limits = np.stack([x0, x1, y0, y1], axis=1)
 
     return limits.astype(int)
+
+
+def extract_stamps(
+    image,
+    centers,
+    npix=128,
+    switch_xy=True,
+    fill=np.nan,
+    dtype=None,
+    chunk=512,
+    return_valid=False,
+):
+    """
+    Cut N npix x npix stamps out of a large 2D image by fancy indexing.
+
+    Parameters
+    ----------
+    image : (H, W) ndarray or h5py Dataset
+        Datasets are read into memory once; per-stamp h5py fancy indexing is
+        orders of magnitude slower.
+    centers : (N, 2) array of ints
+        Absolute pixel positions. (x, y) if switch_xy, else (y, x).
+    npix : int
+        Stamp size. The centre lands at index npix // 2, matching
+        `start = c - npix // 2`.
+    fill : float
+        Value for pixels falling outside the image.
+    dtype : np.dtype or None
+        Output dtype. Defaults to the image dtype (float32 stays float32).
+    chunk : int
+        Stamps per gather, to bound peak temporary memory.
+    return_valid : bool
+        Also return a (N,) bool array, True where the stamp is fully inside.
+
+    Returns
+    -------
+    (N, npix, npix) ndarray, and optionally the validity mask.
+    """
+    if not isinstance(image, np.ndarray):
+        image = image[:]  # h5py Dataset -> memory, once
+    if image.ndim != 2:
+        raise ValueError(f"image must be 2D, got {image.shape}")
+
+    centers = np.asarray(centers)
+    if centers.ndim != 2 or centers.shape[1] != 2:
+        raise ValueError(f"centers must be (N, 2), got {centers.shape}")
+
+    cx, cy = (
+        (centers[:, 0], centers[:, 1]) if switch_xy else (centers[:, 1], centers[:, 0])
+    )
+    cx = np.rint(cx).astype(np.int64)
+    cy = np.rint(cy).astype(np.int64)
+
+    H, W = image.shape
+    half = npix // 2
+    y0, x0 = cy - half, cx - half
+    n = len(centers)
+
+    if dtype is None:
+        dtype = image.dtype
+    if np.isnan(fill) and not np.issubdtype(dtype, np.floating):
+        raise ValueError("fill=nan needs a floating dtype")
+
+    inside = (x0 >= 0) & (x0 + npix <= W) & (y0 >= 0) & (y0 + npix <= H)
+    out = np.empty((n, npix, npix), dtype=dtype)
+    span = np.arange(npix, dtype=np.int64)
+
+    for s in range(0, n, chunk):
+        e = min(s + chunk, n)
+        rows = y0[s:e, None] + span  # (b, npix)
+        cols = x0[s:e, None] + span
+        ok_r, ok_c = (rows >= 0) & (rows < H), (cols >= 0) & (cols < W)
+
+        block = image[
+            np.clip(rows, 0, H - 1)[:, :, None], np.clip(cols, 0, W - 1)[:, None, :]
+        ].astype(dtype, copy=False)
+        if not (ok_r.all() and ok_c.all()):
+            block = block.copy()
+            block[~(ok_r[:, :, None] & ok_c[:, None, :])] = fill
+        out[s:e] = block
+
+    return (out, inside) if return_valid else out
 
 
 # %% Stamp processing functions

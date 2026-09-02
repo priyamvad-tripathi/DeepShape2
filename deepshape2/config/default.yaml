@@ -51,12 +51,16 @@ TRECS_DIR:  "${path:/scratch/tripathi/TRECS/}"
 GENCI_DIR:   "${path:/lustre/fsn1/projects/rech/klu/uyt81gs/}"
 RLF_DIR:    "${path:/home/tripathi/RadioLensfit2/}"
 
-# Models
 MODELS:
   deblender:
     class: VAE
-    weights: "vae_mha.pt"
+    weights: vae_mha.pt          # dir defaults to MODEL_DIR
 
   shapenet:
     class: shapenet_full
-    weights: "shape_network_full.pt"
+    weights: shape_network_full.pt
+
+  vae_skip:
+    class: VAE_skip
+    weights: vae_skip.pt
+    

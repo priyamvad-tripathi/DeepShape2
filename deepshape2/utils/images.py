@@ -302,3 +302,29 @@ def calculate_dirty_peak(img, psf):
     peaks = dirty.max(axis=(-2, -1)).astype(np.float32)
 
     return peaks[0] if single else peaks
+
+
+NPIX = 128
+NPAD = 256
+CHUNK = 512
+
+
+def peak_brightness(iso, psf, chunk=CHUNK, npad=NPAD, npix=NPIX):
+    """
+    Peak of each isolated stamp convolved with the PSF, in Jy/beam.
+
+    iso is Jy/pixel and psf is peak-normalised, so the convolution is
+    exactly the noiseless dirty image of that source in isolation.
+    """
+    n = len(iso)
+    o = (npad - npix) // 2
+    psf_f = rfftn(ifftshift(psf), axes=(0, 1))
+    out = np.empty(n, dtype=np.float32)
+
+    for s in range(0, n, chunk):
+        e = min(s + chunk, n)
+        pad = np.zeros((e - s, npad, npad), dtype=np.float32)
+        pad[:, o : o + npix, o : o + npix] = iso[s:e]
+        conv = irfftn(rfftn(pad, axes=(1, 2)) * psf_f, s=(npad, npad), axes=(1, 2))
+        out[s:e] = conv.max(axis=(1, 2))
+    return out

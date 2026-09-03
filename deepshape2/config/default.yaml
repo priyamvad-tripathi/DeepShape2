@@ -64,3 +64,9 @@ MODELS:
     class: VAE_skip
     weights: vae_skip.pt
     
+ILT_pnp:
+  niter: 30
+  SIGMA: 14e-06
+  f1: 0.11077703085570467 
+  f2: 0.3269146413502898
+  falpha: 13.823761130356372

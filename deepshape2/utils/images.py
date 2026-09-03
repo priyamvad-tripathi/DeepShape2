@@ -14,6 +14,7 @@ __all__ = [
     "extract_cutouts",
     "calculate_dirty_peak",
     "extract_stamps",
+    "peak_brightness",
 ]
 
 # %% Image extraction functions

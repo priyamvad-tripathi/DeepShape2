@@ -7,3 +7,4 @@ from .hqs_pnp import *
 from .shape_network import *
 from .shape_network_v2 import *
 from .vae import *
+from .models_io import *

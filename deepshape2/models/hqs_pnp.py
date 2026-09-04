@@ -1,8 +1,8 @@
-# %%Import Libraries
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from colorist import Color
 from deepinv.models import DRUNet
 from torch.fft import fft2, ifft2, ifftshift
 
@@ -10,25 +10,76 @@ from ..utils.io import load_config
 
 cfg = load_config()
 
-__all__ = ["HQS_PnP", "create_model"]
+__all__ = ["HQS_PnP"]
+
+_HP_KEYS = ("niter", "f1", "f2", "falpha", "SIGMA")
 
 
-# %% Load Model
 class HQS_PnP(nn.Module):
     def __init__(
         self,
-        niter,
-        f1,
-        f2,
-        falpha,
-        denoiser,
-        SIGMA=0.71e-06,
+        niter=None,
+        f1=None,
+        f2=None,
+        falpha=None,
+        SIGMA=None,
+        denoiser=None,
+        defaults=None,
+        verbose_hp=True,
     ):
         super().__init__()
-        self.denoiser = denoiser
-        sigma_np = np.geomspace(f1 * SIGMA, f2 * SIGMA, niter)[::-1].copy()
-        self.sigma_k = torch.tensor(sigma_np, dtype=torch.float32)
-        self.alpha_k = falpha * (SIGMA**2) / (self.sigma_k**2)
+
+        given = dict(niter=niter, f1=f1, f2=f2, falpha=falpha, SIGMA=SIGMA)
+        default = defaults if defaults is not None else cfg["hqs_hyperparams"]
+
+        hp = {k: (default[k] if given[k] is None else given[k]) for k in _HP_KEYS}
+
+        fallback = [k for k in _HP_KEYS if given[k] is None]
+        if fallback:
+            shown = ", ".join(f"{k}={hp[k]:g}" for k in fallback)
+            print(
+                f"  {Color.YELLOW}default hqs_hyperparams (SKA-MID tuning){Color.OFF}"
+                f" -> {shown}"
+            )
+
+        if verbose_hp:
+            shown = ", ".join(
+                f"{k}={hp[k]:g}" + ("*" if given[k] is None else "") for k in _HP_KEYS
+            )
+            tag = (
+                f" {Color.YELLOW}(* = default hqs_hyperparams){Color.OFF}"
+                if fallback
+                else ""
+            )
+            print(f"  {shown}{tag}")
+
+        self.hparams = hp
+        self.denoiser = (
+            denoiser
+            if denoiser is not None
+            else DRUNet(in_channels=1, out_channels=1, pretrained=None)
+        )
+
+        sigma_np = np.geomspace(
+            hp["f1"] * hp["SIGMA"], hp["f2"] * hp["SIGMA"], hp["niter"]
+        )[::-1].copy()
+        sigma_k = torch.tensor(sigma_np, dtype=torch.float32)
+        self.register_buffer("sigma_k", sigma_k, persistent=False)
+        self.register_buffer(
+            "alpha_k", hp["falpha"] * (hp["SIGMA"] ** 2) / sigma_k**2, persistent=False
+        )
+
+    def set_hyperparams(self, **kw):
+        """Rebuild the sigma/alpha schedules in place. Returns self."""
+        hp = {**self.hparams, **kw}
+        sigma_np = np.geomspace(
+            hp["f1"] * hp["SIGMA"], hp["f2"] * hp["SIGMA"], hp["niter"]
+        )[::-1].copy()
+        dev = next(self.denoiser.parameters()).device
+        self.sigma_k = torch.tensor(sigma_np, dtype=torch.float32, device=dev)
+        self.alpha_k = hp["falpha"] * (hp["SIGMA"] ** 2) / self.sigma_k**2
+        self.hparams = hp
+        return self
 
     def pad_batch(self, im_batch):
         _, _, N, N2 = im_batch.shape
@@ -80,39 +131,39 @@ class HQS_PnP(nn.Module):
 # %%
 
 
-def create_model(device, path=cfg["MODEL_DIR"] / "drunet_blended.pt", **params):
-    """
-    Creates HQS_PnP model with DRUNet denoiser.
+# def create_model(device, path=cfg["MODEL_DIR"] / "drunet_blended.pt", **params):
+#     """
+#     Creates HQS_PnP model with DRUNet denoiser.
 
-    If `path` is provided, loads checkpoint weights from there.
-    Otherwise, download pretrained weights from DeepInv.
-    """
-    if path is None:
-        print("Downloading pretrained weights from DeepInv.")
-        denoiser = DRUNet(
-            in_channels=1, out_channels=1, pretrained="download", device=device
-        )
-    else:
-        denoiser = DRUNet(in_channels=1, out_channels=1, pretrained=None, device=device)
-        ckpt = torch.load(path, map_location=device, weights_only=False)
-        denoiser.load_state_dict(ckpt["best_weights"])
+#     If `path` is provided, loads checkpoint weights from there.
+#     Otherwise, download pretrained weights from DeepInv.
+#     """
+#     if path is None:
+#         print("Downloading pretrained weights from DeepInv.")
+#         denoiser = DRUNet(
+#             in_channels=1, out_channels=1, pretrained="download", device=device
+#         )
+#     else:
+#         denoiser = DRUNet(in_channels=1, out_channels=1, pretrained=None, device=device)
+#         ckpt = torch.load(path, map_location=device, weights_only=False)
+#         denoiser.load_state_dict(ckpt["best_weights"])
 
-    # ! Load hyperparameters from config file if not provided by user
-    default = cfg["hqs_hyperparams"]
-    hyperparams = {**default, **params}
+#     # ! Load hyperparameters from config file if not provided by user
+#     default = cfg["hqs_hyperparams"]
+#     hyperparams = {**default, **params}
 
-    # unknown = hyperparams.keys() - default.keys()
-    # if unknown:
-    #     raise ValueError(f"Unknown hyperparameters: {unknown}")
+#     # unknown = hyperparams.keys() - default.keys()
+#     # if unknown:
+#     #     raise ValueError(f"Unknown hyperparameters: {unknown}")
 
-    model = HQS_PnP(
-        niter=hyperparams["niter"],
-        f1=hyperparams["f1"],
-        f2=hyperparams["f2"],
-        falpha=hyperparams["falpha"],
-        denoiser=denoiser,
-        SIGMA=hyperparams["SIGMA"],
-    ).to(device)
+#     model = HQS_PnP(
+#         niter=hyperparams["niter"],
+#         f1=hyperparams["f1"],
+#         f2=hyperparams["f2"],
+#         falpha=hyperparams["falpha"],
+#         denoiser=denoiser,
+#         SIGMA=hyperparams["SIGMA"],
+#     ).to(device)
 
-    model.eval()
-    return model
+#     model.eval()
+#     return model

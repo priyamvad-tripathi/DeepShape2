@@ -27,13 +27,13 @@ VAE_beta: 1e-4 # KL Divergence weight for VAE
 VAE_lr_init: 1e-4 # Initial learning rate for VAE
 
 
-# HQS_PnP Hyperparameters
-hqs_hyperparams:
-  niter: 30
-  SIGMA: 0.71e-06
-  f1: 0.38046931731218053
-  f2: 3.7035096781994907
-  falpha: 3.1097160530212475
+# # HQS_PnP Hyperparameters
+# hqs_hyperparams:
+#   niter: 30
+#   SIGMA: 0.71e-06
+#   f1: 0.38046931731218053
+#   f2: 3.7035096781994907
+#   falpha: 3.1097160530212475
 
 # TQDM parameters
 tqdm:
@@ -51,6 +51,14 @@ TRECS_DIR:  "${path:/scratch/tripathi/TRECS/}"
 GENCI_DIR:   "${path:/lustre/fsn1/projects/rech/klu/uyt81gs/}"
 RLF_DIR:    "${path:/home/tripathi/RadioLensfit2/}"
 
+hqs_hyperparams:          # SKA-MID tuning; used when a MODELS entry omits keys
+  niter: 30
+  SIGMA: 0.71e-06
+  f1: 0.38046931731218053
+  f2: 3.7035096781994907
+  falpha: 3.1097160530212475
+
+
 MODELS:
   deblender:
     class: VAE
@@ -63,10 +71,20 @@ MODELS:
   vae_skip:
     class: VAE_skip
     weights: vae_skip.pt
-    
-ILT_pnp:
-  niter: 30
-  SIGMA: 14e-06
-  f1: 0.11077703085570467 
-  f2: 0.3269146413502898
-  falpha: 13.823761130356372
+
+  HQS-PnP:
+    class: HQS_PnP
+    weights: drunet_blended.pt
+    weights_prefix: denoiser.
+    # no args -> hqs_hyperparams, prints the notice
+
+  HQS-PnP-ILT:
+    class: HQS_PnP
+    weights: drunet_blended.pt
+    weights_prefix: denoiser.
+    args:
+      niter: 30
+      SIGMA: 1.4e-05
+      f1: 0.11077703085570467
+      f2: 0.3269146413502898
+      falpha: 13.823761130356372

@@ -5,10 +5,10 @@ from colorist import Color
 from omegaconf import DictConfig, OmegaConf
 from torch import nn
 
-from ..models.hqs_pnp import HQS_PnP
-from ..models.shape_network import shapenet_full
-from ..models.vae import VAE, VAE_skip
-from .io import load_config
+from ..utils.io import load_config
+from .hqs_pnp import HQS_PnP
+from .shape_network import shapenet_full
+from .vae import VAE, VAE_skip
 
 MODEL_REGISTRY = {
     "VAE": VAE,

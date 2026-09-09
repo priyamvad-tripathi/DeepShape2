@@ -731,52 +731,52 @@ class PSFDataset(Dataset):
         self.close()
 
 
-class RandomD4:
-    """Dihedral augmentation that preserves the peak pixel and rotates (e1, e2).
+# class RandomD4:
+#     """Dihedral augmentation that preserves the peak pixel and rotates (e1, e2).
 
-    Exact -- no interpolation, so it is safe at ILT sampling where the beam is
-    only ~4 px FWHM and resampling is marginal.  Covers 8 of the group elements
-    only; if the network needs finer PA coverage it has to come from simulation.
+#     Exact -- no interpolation, so it is safe at ILT sampling where the beam is
+#     only ~4 px FWHM and resampling is marginal.  Covers 8 of the group elements
+#     only; if the network needs finer PA coverage it has to come from simulation.
 
-    Two things this handles that hand-rolled versions usually do not:
+#     Two things this handles that hand-rolled versions usually do not:
 
-    * Centring.  torch.rot90 and torch.flip reverse an index as i -> n-1-i, so
-      on a 128-px stamp a peak on pixel 64 lands on 63.  Each reversed axis is
-      rolled back by one.  (This is the same off-by-one that halved the peak
-      when it appeared in the output symmetrisation.)
-    * Ellipticity is spin-2, so it must transform with the stamp.  A rotation by
-      90 deg maps e -> -e; 180 deg leaves it unchanged; a mirror flips the sign
-      of e2 only.  Rotating the image while leaving the target fixed trains the
-      aux head against a label uncorrelated with its input, which is worse than
-      having no aux head at all.
-    """
+#     * Centring.  torch.rot90 and torch.flip reverse an index as i -> n-1-i, so
+#       on a 128-px stamp a peak on pixel 64 lands on 63.  Each reversed axis is
+#       rolled back by one.  (This is the same off-by-one that halved the peak
+#       when it appeared in the output symmetrisation.)
+#     * Ellipticity is spin-2, so it must transform with the stamp.  A rotation by
+#       90 deg maps e -> -e; 180 deg leaves it unchanged; a mirror flips the sign
+#       of e2 only.  Rotating the image while leaving the target fixed trains the
+#       aux head against a label uncorrelated with its input, which is worse than
+#       having no aux head at all.
+#     """
 
-    def __init__(self, rotate=True, flip=True):
-        self.rotate = rotate
-        self.flip = flip
+#     def __init__(self, rotate=True, flip=True):
+#         self.rotate = rotate
+#         self.flip = flip
 
-    def __call__(self, x, aux=None):
-        k = int(torch.randint(4, ())) if self.rotate else 0
-        do_flip = bool(torch.randint(2, ())) if self.flip else False
+#     def __call__(self, x, aux=None):
+#         k = int(torch.randint(4, ())) if self.rotate else 0
+#         do_flip = bool(torch.randint(2, ())) if self.flip else False
 
-        if k:
-            x = torch.rot90(x, k, (-2, -1))
-            # rot90 reverses dim -2 for k=1, both dims for k=2, dim -1 for k=3
-            shifts, dims = {
-                1: ((1,), (-2,)),
-                2: ((1, 1), (-2, -1)),
-                3: ((1,), (-1,)),
-            }[k]
-            x = torch.roll(x, shifts, dims)
-        if do_flip:
-            x = torch.roll(torch.flip(x, (-1,)), 1, -1)
+#         if k:
+#             x = torch.rot90(x, k, (-2, -1))
+#             # rot90 reverses dim -2 for k=1, both dims for k=2, dim -1 for k=3
+#             shifts, dims = {
+#                 1: ((1,), (-2,)),
+#                 2: ((1, 1), (-2, -1)),
+#                 3: ((1,), (-1,)),
+#             }[k]
+#             x = torch.roll(x, shifts, dims)
+#         if do_flip:
+#             x = torch.roll(torch.flip(x, (-1,)), 1, -1)
 
-        if aux is None:
-            return x
+#         if aux is None:
+#             return x
 
-        aux = aux.clone()
-        if k % 2:  # 90 or 270 deg: e -> -e
-            aux[0], aux[1] = -aux[0], -aux[1]
-        if do_flip:  # mirror: e2 -> -e2
-            aux[1] = -aux[1]
-        return x, aux
+#         aux = aux.clone()
+#         if k % 2:  # 90 or 270 deg: e -> -e
+#             aux[0], aux[1] = -aux[0], -aux[1]
+#         if do_flip:  # mirror: e2 -> -e2
+#             aux[1] = -aux[1]
+#         return x, aux

@@ -227,7 +227,7 @@ class PSFAutoencoder(nn.Module):
         channels=(32, 64, 96, 128, 192),
         blocks=(1, 1, 2, 2, 2),
         bottleneck_ch=16,
-        n_aux=4,
+        n_aux=0,
         softening=0.01,
         dropout=0.0,
         **kwargs,

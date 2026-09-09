@@ -4,12 +4,14 @@ from escnn import gspaces, nn
 
 from ..utils.io import load_config
 from ..utils.torch_utils import set_seed
+from .psf_autoencoder import PSFAutoencoder
 
 set_seed()
 cfg = load_config()
 MODEL_DIR = cfg["MODEL_DIR"]
+ELAIS_DIR = cfg["ELAIS_DIR"] / "Model_weights"
 
-__all__ = ["shapenet", "shapenet_full"]
+__all__ = ["shapenet", "shapenet_full", "shapenet_full_new"]
 # %% Equivariant Block for feature extraction from images
 
 
@@ -178,6 +180,69 @@ class shapenet_full(torch.nn.Module):
         # feature dimensions
         self.eq_feat_dim = 32 * 12 * 12
         self.psf_latent_dim = 1152
+
+        # Fully Connected classifier
+        # self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
+
+        # Fully Connected classifier
+        self.fully_net = torch.nn.Sequential(
+            torch.nn.BatchNorm1d(self.eq_feat_dim + self.psf_latent_dim),
+            torch.nn.ReLU(),
+            torch.nn.Linear(self.eq_feat_dim + self.psf_latent_dim, 4),
+            torch.nn.ReLU(),
+            torch.nn.Linear(4, 2),
+            torch.nn.Tanh(),
+        )
+
+        self.flatten = torch.nn.Flatten()
+        # self.norm = MinMaxNorm()
+
+    def forward(self, input: torch.Tensor):
+        im = input[:, 0, :, :].unsqueeze(1)
+        psf = input[:, 1, :, :].unsqueeze(1)
+
+        # im = self.norm(im)
+        # psf = self.norm(psf)
+
+        psf_coded = self.encode(psf)
+
+        im_feat = self.eq(im)
+        im_feat = self.flatten(im_feat)
+
+        # out = self.fully_net(im_feat, psf_coded)
+
+        features = torch.cat((im_feat, psf_coded), dim=1)
+        out = self.fully_net(features)
+
+        return out
+
+
+class shapenet_full_new(torch.nn.Module):
+    def __init__(
+        self,
+        eq_block=eq_block,
+        encoder_path=ELAIS_DIR / "autoencoder_ilt.pt",
+        eq_path=ELAIS_DIR / "shapenet_true_old.pt",
+        psf_dim=128,
+    ):
+        super().__init__()
+
+        shapenet_true = shapenet()
+        ckpt_shape = torch.load(eq_path, map_location="cpu", weights_only=False)
+        shapenet_true.load_state_dict(ckpt_shape["best_weights"])
+        shapenet_true.eval()
+        self.eq = shapenet_true.eq
+
+        autoencoder = PSFAutoencoder()
+        ckpt = torch.load(encoder_path, map_location="cpu", weights_only=False)
+        autoencoder.load_state_dict(ckpt["best_weights"])
+        autoencoder.eval()
+        self.encode = autoencoder.encoder
+        self.encode.eval()
+
+        # feature dimensions
+        self.eq_feat_dim = 32 * 12 * 12
+        self.psf_latent_dim = psf_dim
 
         # Fully Connected classifier
         # self.fully_net = FullNet(eq_dim=self.eq_feat_dim, psf_dim=self.psf_latent_dim)
